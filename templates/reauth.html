@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Confirmar identidade · Service Manager{% endblock %}
+{% block content %}
+<section class="auth-card">
+  <p class="eyebrow">Confirmação necessária</p>
+  <h1>Confirme sua identidade</h1>
+  <p class="muted">A confirmação autoriza revelações por cinco minutos.</p>
+  <form method="post" action="{{ url_for('auth.reauth') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Senha atual<input name="password" type="password" autocomplete="current-password" required maxlength="4096"></label>
+    <label>Código do autenticador<input name="totp_code" inputmode="numeric" autocomplete="one-time-code" maxlength="4096"></label>
+    <label>Código de recuperação (alternativo)<input name="recovery_code" type="password" autocomplete="off" maxlength="4096"></label>
+    <button class="button" type="submit">Confirmar</button>
+  </form>
+</section>
+{% endblock %}

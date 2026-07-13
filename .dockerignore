@@ -1,0 +1,17 @@
+credentials.db
+*.db
+*.sqlite*
+*.bak
+*.csv
+*.xlsx
+.env*
+backups/
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+.git
+tests/
+local://service-manager-task-1-report.md
+service-manager-task-1-report.md
+migration-output/
