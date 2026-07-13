@@ -89,8 +89,8 @@ def test_authenticated_listing_uses_external_assets_and_excludes_secret_values(a
 
     assert response.status_code == 200
     assert "Service Manager" in body
-    assert 'href="/static/css/app.css"' in body
-    assert 'src="/static/js/app.js"' in body
+    assert 'href="/static/css/app.css?v=' in body
+    assert 'src="/static/js/app.js?v=' in body
     assert "known-secret" not in body
     assert "known-field-secret" not in body
     assert "nota pública" in body
@@ -137,8 +137,8 @@ def test_generic_error_pages_use_the_external_base_template(app, client):
 
     assert response.status_code == 404
     assert "Não encontrado" in body
-    assert 'href="/static/css/app.css"' in body
-    assert 'src="/static/js/app.js"' in body
+    assert 'href="/static/css/app.css?v=' in body
+    assert 'src="/static/js/app.js?v=' in body
 
 def test_bootstrap_page_can_issue_and_display_one_time_totp_enrollment(tmp_path: Path):
     app = create_app(

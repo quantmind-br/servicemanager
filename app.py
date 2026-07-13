@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import functools
+import hashlib
 from collections.abc import Mapping
 from typing import Any
 
@@ -25,6 +27,13 @@ def _trusted_proxy_hops(config: Mapping[str, Any] | None) -> int:
     if not isinstance(value, int) or value < 0:
         raise RuntimeError("TRUSTED_PROXY_HOPS must be a non-negative integer")
     return value
+
+@functools.lru_cache(maxsize=None)
+def _asset_version(static_folder: str, filename: str) -> str:
+    try:
+        return hashlib.sha256((Path(static_folder) / filename).read_bytes()).hexdigest()[:12]
+    except OSError:
+        return "0"
 
 
 def create_app(config: Mapping[str, Any] | None = None) -> Flask:
@@ -75,6 +84,7 @@ def create_app(config: Mapping[str, Any] | None = None) -> Flask:
     app.register_blueprint(routes)
     app.register_blueprint(auth)
     bind_auth(app)
+    app.jinja_env.globals["asset_ver"] = lambda filename: _asset_version(app.static_folder or "static", filename)
     @app.errorhandler(400)
     @app.errorhandler(403)
     @app.errorhandler(404)
