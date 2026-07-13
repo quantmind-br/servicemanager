@@ -15,11 +15,19 @@
     return data;
   };
   // Standard (non-JS) form POSTs carry the token only in the hidden csrf_token
-  // field, which Chrome can restore to a stale value on reload/back. Reset every
-  // such field to the freshly-rendered meta token so it matches the session.
-  if (csrfToken) {
-    for (const field of document.querySelectorAll('input[name="csrf_token"]')) field.value = csrfToken;
-  }
+  // field, which Chrome can restore to a stale value on reload/back/bfcache.
+  // Reset every hidden field to the freshly-rendered meta token (which the
+  // browser does not restore) on load, on pageshow, and right before each submit,
+  // so the field always matches the session instead of "tokens do not match".
+  const syncCsrfFields = (root) => {
+    if (!csrfToken) return;
+    for (const field of root.querySelectorAll('input[name="csrf_token"]')) field.value = csrfToken;
+  };
+  syncCsrfFields(document);
+  window.addEventListener("pageshow", () => syncCsrfFields(document));
+  document.addEventListener("submit", (event) => {
+    if (event.target instanceof HTMLFormElement) syncCsrfFields(event.target);
+  }, true);
   let revealedValue = "";
   let clearTimer = 0;
   let activeReveal = null;

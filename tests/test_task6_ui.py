@@ -277,6 +277,9 @@ def test_standard_forms_sync_hidden_csrf_field_to_meta_token_on_load(client):
     script = client.get("/static/js/app.js").get_data(as_text=True)
     assert 'querySelectorAll(\'input[name="csrf_token"]\')' in script
     assert "field.value = csrfToken" in script
+    assert "syncCsrfFields(document)" in script          # immediate, on load
+    assert '"pageshow"' in script                          # bfcache restore
+    assert 'addEventListener("submit"' in script and ", true)" in script  # capture-phase, pre-submit
 
 def test_listing_restores_management_forms_without_prefilling_secrets(app, client):
     service_id, account_id, field_id = seed_authenticated_secret(app, client)
