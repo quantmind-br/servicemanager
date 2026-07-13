@@ -99,6 +99,38 @@ def test_valid_header_csrf_and_origin_allow_mutation_and_append_secret_free_audi
         assert verify_audit_chain()
 
 
+def test_https_mutation_with_origin_but_no_referer_is_allowed(app, client):
+    """A browser under Referrer-Policy: no-referrer sends Origin but no Referer.
+    Flask-WTF SSL-strict must not demand a Referer on secure requests; the explicit
+    Origin gate plus the CSRF token are the authoritative protection."""
+    _, service_id = authenticated_operator(app, client)
+    allowed = client.post(
+        "/add",
+        base_url="https://localhost",
+        data={"service": service_id, "email": "person@example.com", "password": "https-secret", "status": "ativo"},
+        headers=csrf_headers(client, app),
+    )
+    cross_origin = client.post(
+        "/add",
+        base_url="https://localhost",
+        data={"service": service_id, "email": "evil@example.com", "password": "https-secret", "status": "ativo"},
+        headers=csrf_headers(client, app, origin="https://evil.example"),
+    )
+    with client.session_transaction() as session:
+        session["csrf_token"] = "task-five-csrf-token"
+    token = URLSafeTimedSerializer(app.config["SECRET_KEY"], salt="wtf-csrf-token").dumps("task-five-csrf-token")
+    missing_origin = client.post(
+        "/add",
+        base_url="https://localhost",
+        data={"service": service_id, "email": "noorigin@example.com", "password": "https-secret", "status": "ativo"},
+        headers={"X-CSRFToken": token},
+    )
+    assert allowed.status_code == 302
+    assert cross_origin.status_code == 403
+    assert missing_origin.status_code == 403
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 1
+
 def test_validation_rejects_duplicate_case_insensitive_email_and_invalid_status_without_mutating(app, client):
     _, service_id = authenticated_operator(app, client)
     first = client.post("/add", data={"service": service_id, "email": "Person@example.com", "password": "safe", "status": "ativo"}, headers=csrf_headers(client, app))
