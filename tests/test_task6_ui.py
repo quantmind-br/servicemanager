@@ -269,6 +269,15 @@ def test_bootstrap_fetches_send_csrf_only_via_header_not_restorable_form_field(c
     assert script.count("body: csrfBody(form)") == 2
     assert "body: new FormData(form)" not in script
 
+def test_standard_forms_sync_hidden_csrf_field_to_meta_token_on_load(client):
+    """Standard form POSTs (login, management) carry the token only in the hidden
+    csrf_token field, which Chrome can restore to a stale value on reload/back.
+    On load every hidden field is reset to the freshly-rendered meta token so the
+    submission matches the session instead of failing with 'tokens do not match'."""
+    script = client.get("/static/js/app.js").get_data(as_text=True)
+    assert 'querySelectorAll(\'input[name="csrf_token"]\')' in script
+    assert "field.value = csrfToken" in script
+
 def test_listing_restores_management_forms_without_prefilling_secrets(app, client):
     service_id, account_id, field_id = seed_authenticated_secret(app, client)
     with app.app_context():

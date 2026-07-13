@@ -14,6 +14,12 @@
     data.delete("csrf_token");
     return data;
   };
+  // Standard (non-JS) form POSTs carry the token only in the hidden csrf_token
+  // field, which Chrome can restore to a stale value on reload/back. Reset every
+  // such field to the freshly-rendered meta token so it matches the session.
+  if (csrfToken) {
+    for (const field of document.querySelectorAll('input[name="csrf_token"]')) field.value = csrfToken;
+  }
   let revealedValue = "";
   let clearTimer = 0;
   let activeReveal = null;
