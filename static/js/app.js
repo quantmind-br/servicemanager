@@ -5,6 +5,15 @@
   const valueOutput = panel?.querySelector(".reveal-value");
   const copyButton = panel?.querySelector(".copy-secret");
   const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+  // Chrome may restore the hidden csrf_token form field to a stale value on
+  // reload/back, which Flask-WTF prefers over the header, causing "tokens do not
+  // match". Send the token only via the X-CSRFToken header (from the meta tag,
+  // which the browser does not restore), so it is the single source of truth.
+  const csrfBody = (form) => {
+    const data = new FormData(form);
+    data.delete("csrf_token");
+    return data;
+  };
   let revealedValue = "";
   let clearTimer = 0;
   let activeReveal = null;
@@ -118,7 +127,7 @@
           method: "POST",
           credentials: "same-origin",
           headers: { "X-CSRFToken": csrfToken, "Accept": "application/json" },
-          body: new FormData(form),
+          body: csrfBody(form),
         });
         if (!response.ok) throw new Error("bootstrap enrollment failed");
         const payload = await response.json();
@@ -149,7 +158,7 @@
           method: "POST",
           credentials: "same-origin",
           headers: { "X-CSRFToken": csrfToken, "Accept": "application/json" },
-          body: new FormData(form),
+          body: csrfBody(form),
         });
         if (response.status === 400) {
           showBootstrapError("Não foi possível confirmar a ativação. Verifique os dados e tente novamente.");

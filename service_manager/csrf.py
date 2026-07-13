@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
-from flask import Flask, abort, request, session
+from flask import Flask, abort, request
 from flask_wtf.csrf import CSRFError, CSRFProtect
 
 csrf = CSRFProtect()
@@ -56,19 +56,9 @@ def init_app(app: Flask) -> None:
         public_origin = app.config["PUBLIC_ORIGIN"]
         claimed_origin = request.headers.get("Origin") or request.headers.get("Referer")
         if not claimed_origin or not _same_origin(claimed_origin, public_origin):
-            app.logger.warning("CSRF_DBG origin_gate reject has_origin=%s has_referer=%s", bool(request.headers.get("Origin")), bool(request.headers.get("Referer")))
             abort(403)
         return None
 
     @app.errorhandler(CSRFError)
-    def csrf_failure(error: CSRFError):
-        app.logger.warning(
-            "CSRF_DBG csrf_failure desc=%r has_cookie=%s has_session_token=%s has_header=%s has_form=%s ctype=%r",
-            getattr(error, "description", None),
-            bool(request.cookies.get("session")),
-            "csrf_token" in session,
-            bool(request.headers.get("X-CSRFToken")),
-            bool(request.form.get("csrf_token")),
-            request.headers.get("Content-Type"),
-        )
+    def csrf_failure(_: CSRFError):
         return "Forbidden", 403

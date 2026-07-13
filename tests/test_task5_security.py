@@ -131,6 +131,30 @@ def test_https_mutation_with_origin_but_no_referer_is_allowed(app, client):
     with app.app_context():
         assert get_db().execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 1
 
+def test_header_only_csrf_is_accepted_and_stale_form_token_is_rejected(app, client):
+    """The bootstrap JS sends the CSRF token only via the X-CSRFToken header (the
+    meta tag). Flask-WTF prioritizes the hidden csrf_token form field over the
+    header, so a stale/mismatched field value would override the valid header and
+    fail closed ("tokens do not match"). The header-only path must be accepted;
+    a mismatched form field must be rejected."""
+    _, service_id = authenticated_operator(app, client)
+    header_only = client.post(
+        "/add",
+        base_url="https://localhost",
+        data={"service": service_id, "email": "header@example.com", "password": "s", "status": "ativo"},
+        headers=csrf_headers(client, app),
+    )
+    stale_form_token = client.post(
+        "/add",
+        base_url="https://localhost",
+        data={"service": service_id, "email": "stale@example.com", "password": "s", "status": "ativo", "csrf_token": "stale-mismatched-token"},
+        headers=csrf_headers(client, app),
+    )
+    assert header_only.status_code == 302
+    assert stale_form_token.status_code == 403
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 1
+
 def test_validation_rejects_duplicate_case_insensitive_email_and_invalid_status_without_mutating(app, client):
     _, service_id = authenticated_operator(app, client)
     first = client.post("/add", data={"service": service_id, "email": "Person@example.com", "password": "safe", "status": "ativo"}, headers=csrf_headers(client, app))

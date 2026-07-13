@@ -258,6 +258,17 @@ def test_bootstrap_confirmation_ui_preserves_enrollment_on_recoverable_error_and
     assert "response.status === 400" in script
     assert "recovery_codes" in script
     assert "secretOutput.textContent = \"\"" in script
+
+def test_bootstrap_fetches_send_csrf_only_via_header_not_restorable_form_field(client):
+    """Chrome can restore the hidden csrf_token form field to a stale value, and
+    Flask-WTF prefers the form field over the X-CSRFToken header, causing
+    "tokens do not match". Both bootstrap fetches must strip csrf_token from the
+    body so the header (from the non-restorable meta tag) is the single source."""
+    script = client.get("/static/js/app.js").get_data(as_text=True)
+    assert 'data.delete("csrf_token")' in script
+    assert script.count("body: csrfBody(form)") == 2
+    assert "body: new FormData(form)" not in script
+
 def test_listing_restores_management_forms_without_prefilling_secrets(app, client):
     service_id, account_id, field_id = seed_authenticated_secret(app, client)
     with app.app_context():
