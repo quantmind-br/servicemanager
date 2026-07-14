@@ -44,6 +44,21 @@
     <span class="sr-only">Filtrar contas</span>
     <input id="account-filter" type="search" placeholder="Filtrar contas…" autocomplete="off">
   </label>
+  <div class="column-filters" role="group" aria-label="Filtrar por coluna">
+    <label class="filter-select">Status
+      <select id="filter-status">
+        <option value="">Todos</option>
+        {% for sval, slabel in labels.items() %}<option value="{{ sval }}">{{ slabel }}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="filter-select">Cadastro
+      <select id="filter-registered">
+        <option value="">Todos</option>
+        <option value="1">Cadastrada</option>
+        <option value="0">Não cadastrada</option>
+      </select>
+    </label>
+  </div>
   <div class="panel-row">
     <details class="panel-details">
       <summary>Adicionar conta</summary>
@@ -90,7 +105,7 @@
       {% for row in rows %}
         {% set search = namespace(value=row['email'] ~ ' ' ~ labels.get(row['status'], row['status'])) %}
         {% for f in row['fields'] %}{% set search.value = search.value ~ ' ' ~ f['name'] ~ ' ' ~ (f['value'] or '') %}{% endfor %}
-        <tr class="account-row" id="row-{{ row['id'] }}" data-row data-id="{{ row['id'] }}" data-search="{{ search.value | e }}">
+        <tr class="account-row" id="row-{{ row['id'] }}" data-row data-id="{{ row['id'] }}" data-status="{{ row['status'] }}" data-registered="{{ 1 if row['registered'] else 0 }}" data-search="{{ search.value | e }}">
           <td class="cell-email">
             <div class="email-line">
               <button class="expand-btn" type="button" data-expand aria-expanded="false" aria-controls="detail-{{ row['id'] }}" title="Detalhes da conta">

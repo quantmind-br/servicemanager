@@ -180,8 +180,8 @@
     });
   });
 
-  // ===== Fuzzy filter: accent-insensitive, case-insensitive subsequence over
-  // each row's data-search (email + status label + non-secret field names/values).
+  // ===== Filters: fuzzy text (accent/case-insensitive subsequence over each
+  // row's data-search) AND'd with the Status and Cadastro column selects.
   const normalize = (text) =>
     (text || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
@@ -195,26 +195,37 @@
   };
 
   const filterInput = document.getElementById("account-filter");
+  const statusFilter = document.getElementById("filter-status");
+  const registeredFilter = document.getElementById("filter-registered");
   const accountsTbody = document.querySelector("table.accounts tbody");
-  if (filterInput && accountsTbody) {
+  if (accountsTbody && (filterInput || statusFilter || registeredFilter)) {
     const rowInfo = Array.from(accountsTbody.querySelectorAll("tr[data-row]")).map((tr) => ({
       tr,
       search: normalize(tr.dataset.search || ""),
+      status: tr.dataset.status || "",
+      registered: tr.dataset.registered || "",
       detail: document.getElementById("detail-" + tr.dataset.id),
     }));
     const noResults = accountsTbody.querySelector("tr.no-results");
     const applyFilter = () => {
-      const query = normalize(filterInput.value.trim());
+      const query = normalize((filterInput?.value || "").trim());
+      const status = statusFilter?.value || "";
+      const registered = registeredFilter?.value || "";
       let visible = 0;
       for (const info of rowInfo) {
-        const show = subsequenceMatch(query, info.search);
+        const show =
+          subsequenceMatch(query, info.search) &&
+          (!status || info.status === status) &&
+          (!registered || info.registered === registered);
         info.tr.hidden = !show;
         if (!show && info.detail) info.detail.hidden = true;
         if (show) visible += 1;
       }
       if (noResults) noResults.hidden = visible !== 0;
     };
-    filterInput.addEventListener("input", applyFilter);
+    filterInput?.addEventListener("input", applyFilter);
+    statusFilter?.addEventListener("change", applyFilter);
+    registeredFilter?.addEventListener("change", applyFilter);
     applyFilter();
   }
 
