@@ -10,7 +10,7 @@ from pathlib import Path
 EXPECTED_COUNTS = {"accounts": 116, "account_service": 116, "field_values": 116, "credentials_backup": 116}
 EXPECTED_SECURE_TABLES = {
     "accounts", "services", "account_service", "custom_fields", "field_values", "users",
-    "recovery_codes", "security_events", "audit_events", "bootstrap_tokens",
+    "security_events", "audit_events",
 }
 EXPECTED_SECURE_COLUMNS = {
     "accounts": {"id", "email", "password_ciphertext", "password_nonce", "password_key_version"},
@@ -18,11 +18,9 @@ EXPECTED_SECURE_COLUMNS = {
     "account_service": {"account_id", "service_id", "status"},
     "custom_fields": {"id", "service_id", "name", "is_secret"},
     "field_values": {"field_id", "account_id", "value_plaintext", "value_ciphertext", "value_nonce", "value_key_version"},
-    "users": {"id", "email", "password_hash", "role", "is_active", "must_change_password", "totp_secret_ciphertext", "totp_nonce", "totp_key_version", "totp_confirmed_at", "last_totp_step", "created_at", "updated_at", "password_changed_at", "session_version", "pending_totp_secret_ciphertext", "pending_totp_nonce", "pending_totp_key_version", "totp_enrollment_shown_at"},
-    "recovery_codes": {"user_id", "code_hash", "used_at"},
+    "users": {"id", "username", "password_hash", "role", "is_active", "must_change_password", "created_at", "updated_at", "password_changed_at", "session_version"},
     "security_events": {"id", "kind", "subject", "source_ip", "occurred_at"},
     "audit_events": {"id", "occurred_at", "actor_user_id", "action", "target_type", "target_id", "metadata_json", "source_ip", "user_agent", "previous_hash", "event_hash"},
-    "bootstrap_tokens": {"token_hash", "user_id", "expires_at", "consumed_at"},
 }
 REQUIRED_TRIGGERS = {
     "audit_events_no_update", "audit_events_no_delete", "field_values_require_secret_representation_insert",
