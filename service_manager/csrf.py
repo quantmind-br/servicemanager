@@ -44,11 +44,11 @@ def init_app(app: Flask) -> None:
     app.config["PUBLIC_ORIGIN"] = validate_public_origin(app.config["PUBLIC_ORIGIN"])
     app.config.setdefault("WTF_CSRF_ENABLED", not app.testing)
     app.config.setdefault("CSRF_ORIGIN_CHECK", not app.testing)
-    # Referrer-Policy: no-referrer strips the Referer that Flask-WTF's SSL-strict
-    # check requires; the Origin gate below plus the CSRF token are authoritative.
+    # `same-origin` Referrer-Policy preserves a same-origin fallback when a
+    # browser omits Origin for a native form POST. The explicit Origin/Referer
+    # gate below remains authoritative alongside Flask-WTF's token validation.
     app.config.setdefault("WTF_CSRF_SSL_STRICT", False)
     csrf.init_app(app)
-
     @app.before_request
     def reject_untrusted_mutation_origin() -> None:
         if not app.config["CSRF_ORIGIN_CHECK"] or request.method not in _UNSAFE_METHODS:

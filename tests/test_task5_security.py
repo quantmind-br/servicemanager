@@ -100,10 +100,46 @@ def test_valid_header_csrf_and_origin_allow_mutation_and_append_secret_free_audi
         assert verify_audit_chain()
 
 
+def test_login_with_valid_token_and_same_origin_referer_no_origin_succeeds(app):
+    """Under Referrer-Policy: same-origin, a browser that omits Origin still
+    sends a same-origin Referer. The CSRF token plus that Referer must reach
+    authentication and succeed; neither header and cross-origin must fail."""
+    def _login_token(c):
+        match = re.search(r'<input type="hidden" name="csrf_token" value="([^"]+)">', c.get("/login").get_data(as_text=True))
+        assert match is not None, "login form missing hidden csrf_token field"
+        return match.group(1)
+
+    valid_c = app.test_client()
+    valid = valid_c.post(
+        "/login",
+        data={"username": "admin", "password": "12345678", "csrf_token": _login_token(valid_c)},
+        headers={"Referer": PUBLIC_ORIGIN + "/login"},
+    )
+
+    neither_c = app.test_client()
+    neither = neither_c.post(
+        "/login",
+        data={"username": "admin", "password": "12345678", "csrf_token": _login_token(neither_c)},
+    )
+
+    cross_c = app.test_client()
+    cross = cross_c.post(
+        "/login",
+        data={"username": "admin", "password": "12345678", "csrf_token": _login_token(cross_c)},
+        headers={"Referer": "https://evil.example/login"},
+    )
+
+    assert valid.status_code == 302
+    assert valid.headers["Location"].endswith("/")
+    assert neither.status_code == 403
+    assert cross.status_code == 403
+
+
 def test_https_mutation_with_origin_but_no_referer_is_allowed(app, client):
-    """A browser under Referrer-Policy: no-referrer sends Origin but no Referer.
-    Flask-WTF SSL-strict must not demand a Referer on secure requests; the explicit
-    Origin gate plus the CSRF token are the authoritative protection."""
+    """A browser under Referrer-Policy: same-origin sends Origin but may omit
+    Referer on cross-document navigations. Flask-WTF SSL-strict must not demand
+    a Referer on secure requests; the explicit Origin gate plus the CSRF token
+    are the authoritative protection."""
     _, service_id = authenticated_operator(app, client)
     allowed = client.post(
         "/add",

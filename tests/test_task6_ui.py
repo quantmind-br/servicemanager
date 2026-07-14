@@ -107,7 +107,7 @@ def test_response_security_headers_are_strict_and_hsts_requires_production_https
     assert "Strict-Transport-Security" not in insecure.headers
     assert response.headers["Content-Security-Policy"] == CSP
     assert response.headers["X-Content-Type-Options"] == "nosniff"
-    assert response.headers["Referrer-Policy"] == "no-referrer"
+    assert response.headers["Referrer-Policy"] == "same-origin"
     assert response.headers["Permissions-Policy"] == "camera=(), microphone=(), geolocation=()"
     assert response.headers["X-Frame-Options"] == "DENY"
     assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"

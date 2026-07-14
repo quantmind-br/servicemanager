@@ -291,7 +291,7 @@ def test_nginx_enforces_upload_limits_proxy_timeouts_rate_limiting_and_defensive
         "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
         "X-Content-Type-Options nosniff always;",
         "X-Frame-Options DENY always;",
-        "Referrer-Policy no-referrer always;",
+        "Referrer-Policy same-origin always;",
         "Permissions-Policy \"camera=(), microphone=(), geolocation=()\" always;",
     ):
         assert directive in nginx

@@ -105,7 +105,7 @@ def create_app(config: Mapping[str, Any] | None = None) -> Flask:
             "form-action 'self'; frame-ancestors 'none'"
         )
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Referrer-Policy"] = "same-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         response.headers["X-Frame-Options"] = "DENY"
         if app.config["IS_PRODUCTION"] and request.is_secure:
