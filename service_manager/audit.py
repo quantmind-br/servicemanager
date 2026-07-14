@@ -128,8 +128,9 @@ def append_audit_event(
         source_ip = request.remote_addr
     if user_agent is None and has_request_context():
         user_agent = request.user_agent.string
-    previous = conn.execute("SELECT event_hash FROM audit_events ORDER BY id DESC LIMIT 1").fetchone()
-    previous_hash = _ZERO_HASH if previous is None else bytes(previous["event_hash"])
+    last = conn.execute("SELECT id, event_hash FROM audit_events ORDER BY id DESC LIMIT 1").fetchone()
+    next_id = 1 if last is None else last["id"] + 1
+    previous_hash = _ZERO_HASH if last is None else bytes(last["event_hash"])
     payload = _event_payload(
         occurred_at=occurred_at,
         actor_user_id=actor_user_id,
@@ -141,15 +142,16 @@ def append_audit_event(
         user_agent=user_agent,
     )
     event_hash = hmac.new(_audit_key(), _canonical_bytes(payload) + previous_hash, hashlib.sha256).digest()
-    return conn.execute(
+    conn.execute(
         """
         INSERT INTO audit_events (
-            occurred_at, actor_user_id, action, target_type, target_id, metadata_json,
+            id, occurred_at, actor_user_id, action, target_type, target_id, metadata_json,
             source_ip, user_agent, previous_hash, event_hash
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (*payload.values(), previous_hash, event_hash),
-    ).lastrowid
+        (next_id, *payload.values(), previous_hash, event_hash),
+    )
+    return next_id
 
 
 def append_audit_event_in_transaction(**event: Any) -> int:

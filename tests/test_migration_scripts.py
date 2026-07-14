@@ -344,6 +344,61 @@ def test_compare_business_data_reports_matching_secret_free_legacy_and_secure_di
     assert legacy_result["counts"] == {"services": 2, "custom_fields": 2, "accounts": 116, "account_service": 116, "field_values": 116}
     assert all(secret not in legacy.stdout + legacy.stderr + encrypted.stdout + encrypted.stderr for secret in ("migration-password-2-only", "migration-field-2-only"))
 
+def test_record_auth_migration_appends_one_idempotent_audit_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source = tmp_path / "old-secure.db"
+    migrated = tmp_path / "new-secure.db"
+    _old_secure_source(source)
+    _run_auth_migration(source, migrated, {"1": "admin"}, tmp_path, monkeypatch)
+    recorder = _script_module("record_auth_migration")
+    monkeypatch.setenv("DATABASE_PATH", str(migrated))
+    monkeypatch.setenv("DATA_KEY_V1", DATA_KEY)
+    monkeypatch.setenv("AUDIT_KEY_V1", DATA_KEY)
+    monkeypatch.setenv("SECRET_KEY", "record-migration-test")
+
+    recorder.record()
+    recorder.record()
+
+    conn = sqlite3.connect(migrated)
+    conn.row_factory = sqlite3.Row
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM audit_events WHERE action='auth.schema_migrated'").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == 26
+        assert conn.execute("SELECT id FROM audit_events ORDER BY id DESC LIMIT 1").fetchone()[0] == 26
+        from _secure_db import load_key
+        from service_manager.audit import verify_audit_chain_with_key
+        assert verify_audit_chain_with_key(conn, load_key("AUDIT_KEY_V1"))
+    finally:
+        conn.close()
+
+def test_audit_events_append_contiguous_ids_despite_high_preserved_sequence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source = tmp_path / "old-secure.db"
+    migrated = tmp_path / "new-secure.db"
+    _old_secure_source(source)
+    _run_auth_migration(source, migrated, {"1": "admin"}, tmp_path, monkeypatch)
+
+    app = create_app(
+        {
+            "TESTING": True,
+            "DATABASE_PATH": str(migrated),
+            "DATA_KEY_V1": DATA_KEY,
+            "AUDIT_KEY_V1": DATA_KEY,
+            "SECRET_KEY": "contiguous-audit-test",
+        }
+    )
+    with app.app_context():
+        from _secure_db import load_key
+        from service_manager.audit import append_audit_event, verify_audit_chain_with_key
+        from service_manager.db import get_db, transaction as app_transaction
+        conn = get_db()
+        key = load_key("AUDIT_KEY_V1")
+        with app_transaction(conn):
+            append_audit_event(conn, action="test.first", target_type="test")
+            append_audit_event(conn, action="test.second", target_type="test")
+        ids = [row[0] for row in conn.execute("SELECT id FROM audit_events WHERE action LIKE 'test.%' ORDER BY id")]
+        assert ids == [26, 27]
+        assert verify_audit_chain_with_key(conn, key)
+        assert conn.execute("SELECT seq FROM sqlite_sequence WHERE name = 'audit_events'").fetchone()[0] == 93
+
 def test_migration_creates_secure_id_preserving_target_and_handles_empty_values(tmp_path: Path):
     source = tmp_path / "synthetic-legacy.db"
     target = tmp_path / "migrated.db"
