@@ -165,10 +165,18 @@ A autenticação agora usa `users.username` + senha Argon2id, sem TOTP, códigos
 - **Reauth por senha:** a reautenticação para revelações usa senha atual (5 min), sem TOTP nem recovery.
 - **Risco residual:** sem MFA, roubo de senha dá acesso direto. Mitigações ativas: rate limit, Argon2id, rehash oportunista, revogação por `session_version`, auditoria append-only HMAC.
 - **Rotas removidas:** `/bootstrap`, `/bootstrap/issue-totp`, `/enroll-totp`, `/enroll-totp/issue`, `/admin/users/<id>/reset-mfa` retornam 404.
-- **Migração:** snapshot SQLite `backup()` incorporou WAL; mapa `{"1":"admin"}`; destino atômico `0600` sem sidecars; digest semântico local↔remoto idêntico (`05cd498b…`).
+- **Migração:** snapshot SQLite `backup()` incorporou WAL; mapa `{"1":"admin"}`; destino atômico `0600` sem sidecars; digest semântico local↔remoto idêntico.
 - **Auditoria:** evento 26 `auth.schema_migrated` anexado pelo caminho normal após startup saudável; cadeia válida; IDs contíguos apesar de `sqlite_sequence` preservado.
 - **Dependências removidas:** `pyotp`, `qrcode`. `email-validator` mantido para `accounts.email`.
 - **Bloqueio pendente:** smoke autenticado em produção bloqueado por handoff de senha admin ausente; autoDeploy permanece `false`.
+
+## Task6 — correções de interface preservadas (13/07/2026)
+
+- A criação de serviço insere, na mesma transação que cria o serviço e seu evento de auditoria, um vínculo `account_service` com estado `nunca` para cada conta existente. Cada linha exibida mantém, assim, a relação exigida pelos controles de edição, status e campos.
+- Controles `.button-quiet` usam texto escuro nos painéis claros; o cabeçalho mantém contraste branco por seletor específico. Em hover/foco, o controle usa fundo navy e texto branco.
+- Administradores podem reclassificar campos existentes. A rota converte todos os valores na mesma transação entre plaintext e envelopes AES-GCM com AAD `account:{account_id}:field:{field_id}`, restaura o trigger de representação antes do commit e grava `field.reclassified` sem valor secreto. Operadores recebem `403`.
+- A listagem de um serviço parte de `account_service` e faz `JOIN` com `accounts`; contas sem vínculo para o serviço selecionado não são exibidas. Relações esparsas migradas são preservadas e cada ação mostrada continua tendo o vínculo que as rotas exigem.
+- Regressões para classificação de campos, vínculos de serviço e ausência de contas desvinculadas permanecem cobertas pelos testes de interface; o fluxo TOTP/bootstrap antigo foi removido no cutover de 14/07/2026.
 
 ## Task7 — correções finais 2 (13/07/2026)
 
@@ -184,3 +192,12 @@ A autenticação agora usa `users.username` + senha Argon2id, sem TOTP, códigos
 
 - DONE: Falhas ao abrir ou ler metadados XLSX (`[Content_Types].xml` e `.rels`), incluindo compressão ZIP não suportada, são convertidas em erro seguro de formato; `/import` redireciona sem mutar contas nem divulgar o erro do arquivo.
 - Verificação local com banco temporário: `uv run pytest -q tests/test_task7_imports.py` (31 passed). Nenhum `credentials.db`, deploy ou configuração global foi usado.
+
+## Redesign de interface e campo "cadastro" (14/07/2026)
+
+- **Schema:** `account_service` ganhou `registered INTEGER NOT NULL DEFAULT 0 CHECK (registered IN (0, 1))` (credencial possui cadastro básico no serviço, sem produto ativo). Validadores congelados (`_secure_db.EXPECTED_SECURE_COLUMNS`, `verify_migrated_db.EXPECTED_COLUMNS`) atualizados; o schema canônico continua sendo derivado de `service_manager.db.SCHEMA`.
+- **Migração:** `scripts/migrate_registered_column.py` — offline, snapshot `backup()`, valida o schema pré-migração congelado + integridade + cadeia de auditoria (HMAC) na origem, reconstrói o banco pelo schema canônico com `registered=0`, revalida equivalência linha a linha, sequências e cadeia no destino, e faz colocação atômica `0600` com rollback. Reexecutar sobre um banco já migrado falha com "source schema is incompatible".
+- **Rotas:** `POST /accounts/<id>/registered` (aceita apenas `0`/`1`, audita `account.registered_updated`); `/add` aceita `registered=1` apenas para o serviço ativo; `link_all_services` zera `registered` nos demais vínculos.
+- **Interface:** tema escuro; barra de serviços com adição/exclusão no topo; tabela principal Email · Senha (revelação autorizada) · Status (badge de 3 estados) · Cadastro (toggle) · Ações; linhas expansíveis com edição da conta e campos adicionais; filtro fuzzy client-side (subsequência, insensível a acentos) apenas sobre email, rótulo de status e campos não secretos presentes no DOM; nenhum segredo entra em `data-search`.
+- **CSRF/CSP preservados:** todos os formulários mantêm `csrf_token` oculto + `service_id`; sem scripts ou estilos inline; auto-submit usa `requestSubmit()` (dispara a sincronização de token).
+- Verificação local: `uv run pytest -q` (227 passed) + smoke em navegador com banco temporário (login, reauth, revelação, toggle de cadastro persistido, mudança de status, filtro, expansão). Nenhum `credentials.db` foi usado.

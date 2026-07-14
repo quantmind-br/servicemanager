@@ -91,4 +91,65 @@
     });
   });
 
+  // ===== Fuzzy filter: accent-insensitive, case-insensitive subsequence over
+  // each row's data-search (email + status label + non-secret field names/values).
+  const normalize = (text) =>
+    (text || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+  const subsequenceMatch = (needle, hay) => {
+    if (!needle) return true;
+    let i = 0;
+    for (let k = 0; k < hay.length && i < needle.length; k++) {
+      if (hay[k] === needle[i]) i++;
+    }
+    return i === needle.length;
+  };
+
+  const filterInput = document.getElementById("account-filter");
+  const accountsTbody = document.querySelector("table.accounts tbody");
+  if (filterInput && accountsTbody) {
+    const rowInfo = Array.from(accountsTbody.querySelectorAll("tr[data-row]")).map((tr) => ({
+      tr,
+      search: normalize(tr.dataset.search || ""),
+      detail: document.getElementById("detail-" + tr.dataset.id),
+    }));
+    const noResults = accountsTbody.querySelector("tr.no-results");
+    const applyFilter = () => {
+      const query = normalize(filterInput.value.trim());
+      let visible = 0;
+      for (const info of rowInfo) {
+        const show = subsequenceMatch(query, info.search);
+        info.tr.hidden = !show;
+        if (!show && info.detail) info.detail.hidden = true;
+        if (show) visible += 1;
+      }
+      if (noResults) noResults.hidden = visible !== 0;
+    };
+    filterInput.addEventListener("input", applyFilter);
+    applyFilter();
+  }
+
+  // ===== Row expansion: [data-expand] toggles the paired detail row.
+  document.querySelectorAll("[data-expand]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const targetId = button.getAttribute("aria-controls");
+      const target = targetId ? document.getElementById(targetId) : null;
+      if (!target) return;
+      const willOpen = target.hidden;
+      target.hidden = !willOpen;
+      button.setAttribute("aria-expanded", willOpen ? "true" : "false");
+      button.classList.toggle("is-open", willOpen);
+    });
+  });
+
+  // ===== Auto-submit: [data-autosubmit] controls POST their form on change.
+  document.querySelectorAll("[data-autosubmit]").forEach((control) => {
+    control.addEventListener("change", () => {
+      const form = control.closest("form");
+      if (!form) return;
+      if (typeof form.requestSubmit === "function") form.requestSubmit();
+      else form.submit();
+    });
+  });
+
 })();

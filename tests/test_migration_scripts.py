@@ -166,7 +166,9 @@ def test_auth_schema_migration_snapshots_wal_and_preserves_every_non_totp_value(
     source_artifacts = _artifact_bytes(source)
     source_conn = sqlite3.connect(source)
     expected_audit_events = _table_rows(source_conn, "audit_events")
-    expected_business_rows = {table: _table_rows(source_conn, table) for table in ("services", "accounts", "custom_fields", "account_service", "field_values", "security_events")}
+    expected_business_rows = {table: _table_rows(source_conn, table) for table in ("services", "accounts", "custom_fields", "field_values", "security_events")}
+    # The auth-era source predates account_service.registered; the migration must append it as 0.
+    expected_business_rows["account_service"] = [(*row, 0) for row in _table_rows(source_conn, "account_service")]
     expected_sequences = dict(source_conn.execute("SELECT name, seq FROM sqlite_sequence WHERE name IN ('accounts', 'services', 'custom_fields', 'users', 'security_events', 'audit_events')"))
     expected_user = source_conn.execute("SELECT id, password_hash, role, is_active, must_change_password, created_at, updated_at, password_changed_at, session_version FROM users").fetchone()
     source_artifacts = _artifact_bytes(source)
@@ -1271,3 +1273,71 @@ def test_verifier_converts_corrupt_target_relationship_lookup_to_generic_script_
     assert result.returncode != 0
     assert "Traceback" not in result.stdout + result.stderr
     assert "migration-password-2-only" not in result.stdout + result.stderr
+
+
+def _strip_registered_column(source: Path, destination: Path) -> None:
+    """Rebuild `source` under the historical pre-registered schema at `destination`."""
+    from service_manager.db import SCHEMA
+
+    registered_line = "    registered INTEGER NOT NULL DEFAULT 0 CHECK (registered IN (0, 1)),\n"
+    assert registered_line in SCHEMA
+    old_schema = SCHEMA.replace(registered_line, "")
+    src = sqlite3.connect(source)
+    dst = sqlite3.connect(destination)
+    try:
+        dst.executescript(old_schema)
+        for table in ("services", "accounts", "users", "custom_fields", "field_values", "security_events", "audit_events"):
+            rows = [tuple(row) for row in src.execute(f"SELECT * FROM {table}")]
+            if rows:
+                placeholders = ", ".join("?" for _ in rows[0])
+                dst.executemany(f"INSERT INTO {table} VALUES ({placeholders})", rows)
+        dst.executemany(
+            "INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, ?)",
+            [tuple(row) for row in src.execute("SELECT account_id, service_id, status FROM account_service")],
+        )
+        dst.execute("DELETE FROM sqlite_sequence")
+        dst.executemany(
+            "INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)",
+            [tuple(row) for row in src.execute("SELECT name, seq FROM sqlite_sequence")],
+        )
+        dst.commit()
+    finally:
+        src.close()
+        dst.close()
+    os.chmod(destination, 0o600)
+
+
+def test_registered_column_migration_preserves_every_value_and_rejects_migrated_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    old = tmp_path / "old-secure.db"
+    base = tmp_path / "auth-migrated.db"
+    _old_secure_source(old)
+    _run_auth_migration(old, base, {"1": "admin"}, tmp_path, monkeypatch)
+    source = tmp_path / "pre-registered.db"
+    _strip_registered_column(base, source)
+    source_bytes = source.read_bytes()
+    target = tmp_path / "with-registered.db"
+
+    migration = _script_module("migrate_registered_column")
+    monkeypatch.setenv("AUDIT_KEY_V1", DATA_KEY)
+    migration.migrate(source, target, "AUDIT_KEY_V1")
+
+    assert source.read_bytes() == source_bytes
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    src_conn = sqlite3.connect(source)
+    dst_conn = sqlite3.connect(target)
+    dst_conn.row_factory = sqlite3.Row
+    try:
+        for table in ("services", "accounts", "users", "custom_fields", "field_values", "security_events", "audit_events"):
+            assert _table_rows(dst_conn, table) == _table_rows(src_conn, table)
+        assert _table_rows(dst_conn, "account_service") == [(*row, 0) for row in _table_rows(src_conn, "account_service")]
+        assert dict(dst_conn.execute("SELECT name, seq FROM sqlite_sequence")) == dict(src_conn.execute("SELECT name, seq FROM sqlite_sequence"))
+        from _secure_db import load_key
+        from service_manager.audit import verify_audit_chain_with_key
+        assert verify_audit_chain_with_key(dst_conn, load_key("AUDIT_KEY_V1"))
+        assert {row[1] for row in dst_conn.execute("PRAGMA table_info(account_service)")} == {"account_id", "service_id", "status", "registered"}
+    finally:
+        src_conn.close()
+        dst_conn.close()
+
+    with pytest.raises(migration.ScriptError):
+        migration.migrate(target, tmp_path / "again.db", "AUDIT_KEY_V1")

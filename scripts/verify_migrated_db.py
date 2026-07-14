@@ -20,7 +20,7 @@ EXPECTED_COUNTS = {"accounts": 116, "account_service": 116, "field_values": 116,
 EXPECTED_TABLES = {"accounts", "services", "account_service", "custom_fields", "field_values", "users", "security_events", "audit_events"}
 EXPECTED_COLUMNS = {
     "accounts": {"id", "email", "password_ciphertext", "password_nonce", "password_key_version"}, "services": {"id", "name"},
-    "account_service": {"account_id", "service_id", "status"}, "custom_fields": {"id", "service_id", "name", "is_secret"},
+    "account_service": {"account_id", "service_id", "status", "registered"}, "custom_fields": {"id", "service_id", "name", "is_secret"},
     "field_values": {"field_id", "account_id", "value_plaintext", "value_ciphertext", "value_nonce", "value_key_version"},
     "users": {"id", "username", "password_hash", "role", "is_active", "must_change_password", "created_at", "updated_at", "password_changed_at", "session_version"},
     "security_events": {"id", "kind", "subject", "source_ip", "occurred_at"},

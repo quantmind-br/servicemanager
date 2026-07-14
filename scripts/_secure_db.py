@@ -15,7 +15,7 @@ EXPECTED_SECURE_TABLES = {
 EXPECTED_SECURE_COLUMNS = {
     "accounts": {"id", "email", "password_ciphertext", "password_nonce", "password_key_version"},
     "services": {"id", "name"},
-    "account_service": {"account_id", "service_id", "status"},
+    "account_service": {"account_id", "service_id", "status", "registered"},
     "custom_fields": {"id", "service_id", "name", "is_secret"},
     "field_values": {"field_id", "account_id", "value_plaintext", "value_ciphertext", "value_nonce", "value_key_version"},
     "users": {"id", "username", "password_hash", "role", "is_active", "must_change_password", "created_at", "updated_at", "password_changed_at", "session_version"},

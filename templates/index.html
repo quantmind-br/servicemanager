@@ -1,155 +1,208 @@
 {% extends "base.html" %}
+{% block title %}Contas de serviço · Service Manager{% endblock %}
 {% block content %}
 {% set is_admin = g.current_user and g.current_user['role'] == 'admin' %}
+
 <section class="page-heading">
   <p class="eyebrow">Cofre de acesso</p>
   <h1>Contas de serviço</h1>
-  {% if current_name %}<p class="muted">Serviço selecionado: <strong>{{ current_name }}</strong></p>{% else %}<p class="muted">Selecione ou crie um serviço para começar.</p>{% endif %}
-{% if import_feedback %}<p class="muted" role="status">{{ import_feedback }}</p>{% endif %}
+  {% if current_name %}<p class="muted">Serviço selecionado: <strong class="ink-strong">{{ current_name }}</strong></p>{% else %}<p class="muted">Selecione ou crie um serviço para começar.</p>{% endif %}
+  {% if import_feedback %}<p class="feedback" role="status">{{ import_feedback }}</p>{% endif %}
 </section>
 
-<section class="panel management-panel" aria-labelledby="services-heading">
-  <div class="panel-heading"><h2 id="services-heading">Serviços</h2></div>
-  <nav class="service-nav" aria-label="Serviços">
+<section class="service-bar" aria-label="Serviços">
+  <nav class="service-chips" aria-label="Selecionar serviço">
     {% for service in services %}
-    <a class="service-link{% if service['id'] == current %} is-current{% endif %}" href="{{ url_for('routes.index', service=service['id']) }}">{{ service['name'] }}</a>
+    <a class="chip{% if service['id'] == current %} is-current{% endif %}" href="{{ url_for('routes.index', service=service['id']) }}">{{ service['name'] }}</a>
     {% endfor %}
   </nav>
-  <div class="form-grid">
-    <form method="post" action="{{ url_for('routes.service_add') }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <label>Novo serviço<input name="name" required minlength="1" maxlength="100"></label>
-      <button class="button" type="submit">Adicionar serviço</button>
-    </form>
-    {% if current and is_admin %}
-    <form method="post" action="{{ url_for('routes.service_delete', service_id=current) }}" data-confirm="Excluir este serviço e seus vínculos?">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button class="button button-danger" type="submit">Excluir serviço atual</button>
-    </form>
-    {% endif %}
-  </div>
+  <form class="service-add" method="post" action="{{ url_for('routes.service_add') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input name="name" required minlength="1" maxlength="100" placeholder="Novo serviço" aria-label="Nome do novo serviço">
+    <button class="button button-small" type="submit">Adicionar</button>
+  </form>
+  {% if current and is_admin %}
+  <form method="post" action="{{ url_for('routes.service_delete', service_id=current) }}" data-confirm="Excluir este serviço e seus vínculos?">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button class="button button-small button-danger" type="submit">Excluir serviço</button>
+  </form>
+  {% endif %}
 </section>
 
 {% if current %}
 <section class="summary" aria-label="Resumo das contas">
-  <span><strong>{{ counts.total }}</strong> contas</span>
-  <span>{{ counts.ativo }} ativas</span>
-  <span>{{ counts.inativo }} inativas</span>
+  <span class="stat"><strong>{{ counts.total }}</strong> contas</span>
+  <span class="stat-dot dot-ativo">{{ counts.ativo }} ativas</span>
+  <span class="stat-dot dot-nunca">{{ counts.nunca }} sem uso</span>
+  <span class="stat-dot dot-inativo">{{ counts.inativo }} inativas</span>
 </section>
 
-<section class="panel management-panel" aria-labelledby="new-account-heading">
-  <div class="panel-heading"><h2 id="new-account-heading">Adicionar conta</h2><p>Informe a senha apenas para criar ou trocar a conta.</p></div>
-  <form class="form-grid" method="post" action="{{ url_for('routes.add') }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="service_id" value="{{ current }}">
-    <label>Email<input name="email" type="email" autocomplete="off" required maxlength="254"></label>
-    <label>Senha<input name="password" type="password" autocomplete="new-password" required maxlength="4096"></label>
-    <label>Status<select name="status"><option value="ativo">Ativo</option><option value="nunca">Nunca usado</option><option value="inativo">Inativo</option></select></label>
-    <button class="button" type="submit">Adicionar conta</button>
-  </form>
-</section>
+<div class="table-controls">
+  <label class="filter-field">
+    <span class="sr-only">Filtrar contas</span>
+    <input id="account-filter" type="search" placeholder="Filtrar contas…" autocomplete="off">
+  </label>
+  <div class="panel-row">
+    <details class="panel-details">
+      <summary>Adicionar conta</summary>
+      <form class="inline-form-grid" method="post" action="{{ url_for('routes.add') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="service_id" value="{{ current }}">
+        <label>Email<input name="email" type="email" autocomplete="off" required maxlength="254"></label>
+        <label>Senha<input name="password" type="password" autocomplete="new-password" required maxlength="4096"></label>
+        <label>Status<select name="status">{% for sval, slabel in labels.items() %}<option value="{{ sval }}">{{ slabel }}</option>{% endfor %}</select></label>
+        <label class="checkbox-label"><input type="checkbox" name="registered" value="1"> Cadastrada</label>
+        <button class="button" type="submit">Adicionar</button>
+      </form>
+    </details>
+    {% if is_admin %}
+    <details class="panel-details">
+      <summary>Importar contas</summary>
+      <form class="inline-form-grid" method="post" action="{{ url_for('routes.import_bulk') }}" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="service_id" value="{{ current }}">
+        <label>Arquivo CSV/XLSX<input name="file" type="file" accept=".csv,.xlsx" required></label>
+        <button class="button" type="submit">Importar</button>
+      </form>
+      <p class="muted template-links"><a href="{{ url_for('routes.template_csv') }}">Modelo CSV</a> · <a href="{{ url_for('routes.template_xlsx') }}">Modelo XLSX</a></p>
+    </details>
+    {% endif %}
+  </div>
+</div>
 
-{% if is_admin %}
-<section class="panel management-panel" aria-labelledby="import-heading">
-  <div class="panel-heading"><h2 id="import-heading">Importar contas</h2><p>CSV UTF-8 ou XLSX.</p></div>
-  <form class="form-grid" method="post" action="{{ url_for('routes.import_bulk') }}" enctype="multipart/form-data">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="service_id" value="{{ current }}">
-    <label>Arquivo<input name="file" type="file" accept=".csv,.xlsx" required></label>
-    <button class="button" type="submit">Importar</button>
-  </form>
-  <p><a href="{{ url_for('routes.template_csv') }}">Baixar modelo CSV</a> · <a href="{{ url_for('routes.template_xlsx') }}">Baixar modelo XLSX</a></p>
-</section>
-{% endif %}
-
-<section class="panel" aria-labelledby="accounts-heading">
-  <div class="panel-heading"><h2 id="accounts-heading">Contas</h2><p>Segredos permanecem protegidos até uma revelação autorizada.</p></div>
+<section class="panel accounts-panel" aria-labelledby="accounts-heading">
+  <div class="panel-heading"><h2 id="accounts-heading">Contas</h2><p class="muted">Segredos permanecem protegidos até uma revelação autorizada.</p></div>
   {% if rows %}
   <div class="table-wrap">
-    <table>
-      <thead><tr><th>Email e status</th><th>Campos</th><th>Ações</th></tr></thead>
+    <table class="accounts">
+      <thead>
+        <tr>
+          <th scope="col">Email</th>
+          <th scope="col">Senha</th>
+          <th scope="col">Status</th>
+          <th scope="col">Cadastro</th>
+          <th scope="col">Ações</th>
+        </tr>
+      </thead>
       <tbody>
       {% for row in rows %}
-        <tr>
-          <td>
-            <form class="compact-form" method="post" action="{{ url_for('routes.update', item_id=row['id']) }}">
+        {% set search = namespace(value=row['email'] ~ ' ' ~ labels.get(row['status'], row['status'])) %}
+        {% for f in row['fields'] if not f['is_secret'] %}{% set search.value = search.value ~ ' ' ~ f['name'] ~ ' ' ~ (f['value'] or '') %}{% endfor %}
+        <tr class="account-row" id="row-{{ row['id'] }}" data-row data-id="{{ row['id'] }}" data-search="{{ search.value | e }}">
+          <td class="cell-email"><span class="email-text" title="{{ row['email'] }}">{{ row['email'] }}</span></td>
+          <td class="cell-secret">
+            <button class="button button-small reveal-btn" type="button" data-reveal-url="{{ url_for('routes.reveal_password', account_id=row['id']) }}">Revelar</button>
+          </td>
+          <td class="cell-status">
+            <form method="post" action="{{ url_for('routes.update_status', item_id=row['id']) }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="service_id" value="{{ current }}">
-              <label>Email<input name="email" type="email" value="{{ row['email'] }}" autocomplete="off" required maxlength="254"></label>
-              <label>Nova senha <span class="muted">(vazia preserva)</span><input name="password" type="password" value="" autocomplete="new-password" maxlength="4096"></label>
-              <button class="button button-small" type="submit">Salvar conta</button>
+              <span class="status-pill status-{{ row['status'] }}">
+                <select class="status-badge" name="status" data-autosubmit aria-label="Status da conta">
+                  {% for sval, slabel in labels.items() %}<option value="{{ sval }}"{% if row['status'] == sval %} selected{% endif %}>{{ slabel }}</option>{% endfor %}
+                </select>
+              </span>
             </form>
-            <form class="compact-form status-form" method="post" action="{{ url_for('routes.update_status', item_id=row['id']) }}">
+          </td>
+          <td class="cell-cadastro">
+            <form method="post" action="{{ url_for('routes.update_registered', item_id=row['id']) }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="service_id" value="{{ current }}">
-              <label>Status<select name="status"><option value="ativo"{% if row['status'] == 'ativo' %} selected{% endif %}>Ativo</option><option value="nunca"{% if row['status'] == 'nunca' %} selected{% endif %}>Nunca usado</option><option value="inativo"{% if row['status'] == 'inativo' %} selected{% endif %}>Inativo</option></select></label>
-              <button class="button button-small button-quiet" type="submit">Atualizar status</button>
+              <label class="toggle">
+                <input type="checkbox" name="registered" value="1" data-autosubmit{% if row['registered'] %} checked{% endif %} aria-label="Cadastrada">
+                <span class="toggle-track"><span class="toggle-thumb"></span></span>
+              </label>
+              <input type="hidden" name="registered" value="0">
             </form>
           </td>
-          <td>
-            <ul class="field-list">
-            {% for field in row['fields'] %}
-              <li class="field-editor">
-                <strong>{{ field['name'] }}</strong>
-                {% if field['is_secret'] %}
-                <span class="protected">Protegido</span>
-                <button class="button button-small" type="button" data-reveal-url="{{ url_for('routes.reveal_field', account_id=row['id'], field_id=field['field_id']) }}">Revelar</button>
-                {% else %}
-                <span>{{ field['value'] }}</span>
-                {% endif %}
-                <form class="compact-form" method="post" action="{{ url_for('routes.field_update', field_id=field['field_id'], account_id=row['id']) }}">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <input type="hidden" name="service_id" value="{{ current }}">
-                  <label>Valor{% if field['is_secret'] %}<input name="value" type="password" value="" autocomplete="new-password" maxlength="4096" placeholder="Vazio preserva">{% else %}<input name="value" value="{{ field['value'] }}" maxlength="4096">{% endif %}</label>
-                  {% if field['is_secret'] %}<label class="checkbox-label"><input name="clear_secret" type="checkbox" value="true"> Limpar valor protegido</label>{% endif %}
-                  <button class="button button-small button-quiet" type="submit">Salvar campo</button>
-                </form>
-                {% if is_admin %}
-                <form class="inline-form" method="post" action="{{ url_for('routes.field_reclassify', field_id=field['field_id']) }}">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <input type="hidden" name="service_id" value="{{ current }}">
-                  <label>Classificação<select name="is_secret"><option value="1"{% if field['is_secret'] %} selected{% endif %}>Protegido</option><option value="0"{% if not field['is_secret'] %} selected{% endif %}>Não secreto</option></select></label>
-                  <button class="button button-small button-quiet" type="submit">Alterar classificação</button>
-                </form>
-                {% endif %}
-                {% if is_admin %}
-                <form class="inline-form" method="post" action="{{ url_for('routes.field_delete', field_id=field['field_id'], account_id=row['id']) }}" data-confirm="Excluir este campo desta conta?">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <input type="hidden" name="service_id" value="{{ current }}">
-                  <button class="button button-small button-danger" type="submit">Excluir campo</button>
-                </form>
-                {% endif %}
-              </li>
-            {% endfor %}
-            </ul>
-            <details class="field-addition"><summary>Adicionar campo</summary>
-              <form class="compact-form" method="post" action="{{ url_for('routes.field_add') }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="service_id" value="{{ current }}">
-                <input type="hidden" name="account_ids" value="{{ row['id'] }}">
-                <label>Nome<input name="name" required minlength="1" maxlength="100"></label>
-                <label>Valor<input name="value" type="password" value="" autocomplete="new-password" required maxlength="4096"></label>
-                {% if is_admin %}<label>Classificação<select name="is_secret"><option value="1">Protegido</option><option value="0">Não secreto</option></select></label>{% else %}<input type="hidden" name="is_secret" value="1">{% endif %}
-                <button class="button button-small" type="submit">Adicionar campo</button>
-              </form>
-            </details>
-          </td>
-          <td>
-            <button class="button button-small" type="button" data-reveal-url="{{ url_for('routes.reveal_password', account_id=row['id']) }}">Revelar senha</button>
+          <td class="cell-actions">
+            <button class="expand-btn" type="button" data-expand aria-expanded="false" aria-controls="detail-{{ row['id'] }}" title="Detalhes da conta">
+              <svg class="chevron" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
             {% if is_admin %}
             <form class="inline-form" method="post" action="{{ url_for('routes.delete', item_id=row['id']) }}" data-confirm="Excluir esta conta?">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="service_id" value="{{ current }}">
-              <button class="button button-small button-danger" type="submit">Excluir conta</button>
+              <button class="button button-small button-danger" type="submit" title="Excluir conta">Excluir</button>
             </form>
             {% endif %}
           </td>
         </tr>
+        <tr class="detail-row" id="detail-{{ row['id'] }}" hidden>
+          <td colspan="5">
+            <div class="detail-body">
+              <form class="detail-form" method="post" action="{{ url_for('routes.update', item_id=row['id']) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="service_id" value="{{ current }}">
+                <h3>Editar conta</h3>
+                <div class="detail-grid">
+                  <label>Email<input name="email" type="email" value="{{ row['email'] }}" autocomplete="off" required maxlength="254"></label>
+                  <label>Nova senha <span class="muted-hint">(vazio preserva)</span><input name="password" type="password" value="" autocomplete="new-password" maxlength="4096"></label>
+                </div>
+                <button class="button button-small" type="submit">Salvar</button>
+              </form>
+
+              <div class="fields-block">
+                <h3>Campos adicionais</h3>
+                {% if row['fields'] %}
+                <ul class="field-list">
+                  {% for field in row['fields'] %}
+                  <li class="field-editor">
+                    <div class="field-head">
+                      <span class="field-name">{{ field['name'] }}</span>
+                      {% if field['is_secret'] %}<span class="badge badge-secret">Protegido</span>{% endif %}
+                      {% if field['is_secret'] %}
+                      <button class="button button-small reveal-btn" type="button" data-reveal-url="{{ url_for('routes.reveal_field', account_id=row['id'], field_id=field['field_id']) }}">Revelar</button>
+                      {% endif %}
+                    </div>
+                    {% if not field['is_secret'] %}<div class="field-value">{{ field['value'] }}</div>{% endif %}
+                    <form class="compact-form" method="post" action="{{ url_for('routes.field_update', field_id=field['field_id'], account_id=row['id']) }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="service_id" value="{{ current }}">
+                      <label>Valor{% if field['is_secret'] %}<input name="value" type="password" value="" autocomplete="new-password" maxlength="4096" placeholder="Vazio preserva">{% else %}<input name="value" value="{{ field['value'] }}" maxlength="4096">{% endif %}</label>
+                      {% if field['is_secret'] %}<label class="checkbox-label"><input name="clear_secret" type="checkbox" value="true"> Limpar valor protegido</label>{% endif %}
+                      <button class="button button-small button-quiet" type="submit">Salvar campo</button>
+                    </form>
+                    {% if is_admin %}
+                    <form class="compact-form" method="post" action="{{ url_for('routes.field_reclassify', field_id=field['field_id']) }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="service_id" value="{{ current }}">
+                      <label>Classificação<select name="is_secret"><option value="1"{% if field['is_secret'] %} selected{% endif %}>Protegido</option><option value="0"{% if not field['is_secret'] %} selected{% endif %}>Não secreto</option></select></label>
+                      <button class="button button-small button-quiet" type="submit">Alterar classificação</button>
+                    </form>
+                    <form class="inline-form" method="post" action="{{ url_for('routes.field_delete', field_id=field['field_id'], account_id=row['id']) }}" data-confirm="Excluir este campo desta conta?">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="service_id" value="{{ current }}">
+                      <button class="button button-small button-danger" type="submit">Excluir campo</button>
+                    </form>
+                    {% endif %}
+                  </li>
+                  {% endfor %}
+                </ul>
+                {% else %}<p class="muted-hint">Nenhum campo adicional.</p>{% endif %}
+
+                <details class="field-addition">
+                  <summary>Adicionar campo</summary>
+                  <form class="compact-form" method="post" action="{{ url_for('routes.field_add') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="service_id" value="{{ current }}">
+                    <input type="hidden" name="account_ids" value="{{ row['id'] }}">
+                    <label>Nome<input name="name" required minlength="1" maxlength="100"></label>
+                    <label>Valor<input name="value" type="password" value="" autocomplete="new-password" required maxlength="4096"></label>
+                    {% if is_admin %}<label>Classificação<select name="is_secret"><option value="1">Protegido</option><option value="0">Não secreto</option></select></label>{% else %}<input type="hidden" name="is_secret" value="1">{% endif %}
+                    <button class="button button-small" type="submit">Adicionar campo</button>
+                  </form>
+                </details>
+              </div>
+            </div>
+          </td>
+        </tr>
       {% endfor %}
+      <tr class="no-results" hidden><td colspan="5"><p class="empty-state">Nenhuma conta corresponde ao filtro.</p></td></tr>
       </tbody>
     </table>
   </div>
-  {% else %}<p class="empty-state">Nenhuma conta cadastrada neste serviço.</p>{% endif %}
+  {% else %}<div class="empty-wrap"><p class="empty-state">Nenhuma conta cadastrada neste serviço ainda. Use “Adicionar conta” acima para começar.</p></div>{% endif %}
 </section>
 
 <section class="reveal-panel" aria-live="polite" hidden>
@@ -157,6 +210,10 @@
   <output class="reveal-value"></output>
   <button class="button button-small copy-secret" type="button">Copiar</button>
   <p class="muted reveal-expiry">Será removido em 30 segundos ou ao ocultar a aba.</p>
+</section>
+{% else %}
+<section class="panel empty-service">
+  <p class="empty-state">Selecione um serviço acima, ou crie um novo, para gerenciar suas contas.</p>
 </section>
 {% endif %}
 {% endblock %}

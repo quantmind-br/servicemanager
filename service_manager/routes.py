@@ -128,15 +128,15 @@ def _related_field_account(conn, service_id: int | None, field_id: int, account_
         abort(404)
 
 
-def link_all_services(conn, account_id: int, active_service_id: int, status: str) -> None:
+def link_all_services(conn, account_id: int, active_service_id: int, status: str, registered: int = 0) -> None:
     for service in conn.execute("SELECT id FROM services"):
         conn.execute(
             """
-            INSERT INTO account_service (account_id, service_id, status)
-            VALUES (?, ?, ?)
-            ON CONFLICT(account_id, service_id) DO UPDATE SET status = excluded.status
+            INSERT INTO account_service (account_id, service_id, status, registered)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(account_id, service_id) DO UPDATE SET status = excluded.status, registered = excluded.registered
             """,
-            (account_id, service["id"], status if service["id"] == active_service_id else "nunca"),
+            (account_id, service["id"], status if service["id"] == active_service_id else "nunca", registered if service["id"] == active_service_id else 0),
         )
 
 @routes.get("/healthz")
@@ -163,7 +163,7 @@ def index() -> str:
     if service_id is not None:
         account_rows = conn.execute(
             """
-            SELECT a.id, a.email, link.status
+            SELECT a.id, a.email, link.status, link.registered
             FROM account_service AS link
             JOIN accounts AS a ON a.id = link.account_id
             WHERE link.service_id = ?
@@ -192,7 +192,7 @@ def index() -> str:
             )
         for row in sorted(account_rows, key=lambda account: (STATUS_ORDER.get(account["status"], 1), account["email"].lower())):
             counts[row["status"]] += 1
-            rows.append({"id": row["id"], "email": row["email"], "status": row["status"], "fields": field_names[row["id"]]})
+            rows.append({"id": row["id"], "email": row["email"], "status": row["status"], "registered": bool(row["registered"]), "fields": field_names[row["id"]]})
     counts["total"] = len(rows)
     current_name = next((service["name"] for service in services if service["id"] == service_id), None)
     import_feedback = None
@@ -222,6 +222,7 @@ def add() -> Response:
     email = _valid_email(request.form.get("email"))
     password = _valid_secret(request.form.get("password", ""))
     status = normalize_status(request.form.get("status"))
+    registered = 1 if request.form.get("registered") == "1" else 0
     if email is None or password is None or status is None:
         return Response("Conta inválida", status=400)
     try:
@@ -234,7 +235,7 @@ def add() -> Response:
                 "UPDATE accounts SET password_ciphertext = ?, password_nonce = ?, password_key_version = ? WHERE id = ?",
                 (*encrypted_account_password(account_id, password), account_id),
             )
-            link_all_services(conn, account_id, service_id, status)
+            link_all_services(conn, account_id, service_id, status, registered)
             _audit(conn, action="account.created", target_type="account", target_id=account_id, metadata={"service_id": service_id})
     except Exception as error:
         if "UNIQUE" in str(error).upper():
@@ -352,6 +353,21 @@ def update_status(item_id: int) -> Response:
     with transaction(conn):
         conn.execute("UPDATE account_service SET status=? WHERE account_id=? AND service_id=?", (status, item_id, service_id))
         _audit(conn, action="account.status_updated", target_type="account", target_id=item_id, metadata={"service_id": service_id})
+    return redirect(url_for("routes.index", service=service_id))
+
+
+@routes.post("/accounts/<int:item_id>/registered")
+def update_registered(item_id: int) -> Response:
+    conn = get_db()
+    service_id = required_service_id()
+    _related_account(conn, service_id, item_id)
+    raw = request.form.get("registered")
+    if raw not in {"0", "1"}:
+        return Response("Cadastro inválido", status=400)
+    registered = int(raw)
+    with transaction(conn):
+        conn.execute("UPDATE account_service SET registered=? WHERE account_id=? AND service_id=?", (registered, item_id, service_id))
+        _audit(conn, action="account.registered_updated", target_type="account", target_id=item_id, metadata={"service_id": service_id, "registered": registered})
     return redirect(url_for("routes.index", service=service_id))
 
 @routes.post("/delete/<int:item_id>")

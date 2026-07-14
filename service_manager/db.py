@@ -31,6 +31,7 @@ CREATE TABLE account_service (
     account_id INTEGER NOT NULL,
     service_id INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'nunca' CHECK (status IN ('ativo', 'nunca', 'inativo')),
+    registered INTEGER NOT NULL DEFAULT 0 CHECK (registered IN (0, 1)),
     PRIMARY KEY (account_id, service_id),
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
     FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE CASCADE

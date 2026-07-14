@@ -295,9 +295,70 @@ def test_creating_service_backfills_existing_account_links_for_displayed_control
     assert updated.status_code == 302
 
 
-def test_quiet_buttons_have_contrast_on_light_panels_and_dark_header(app, client):
-    stylesheet = client.get("/static/css/app.css").get_data(as_text=True)
+def test_tabular_listing_exposes_filter_expansion_and_inline_controls(app, client):
+    service_id, account_id, _ = seed_authenticated_secret(app, client)
 
-    assert ".button-quiet { background: transparent; border-color: #9ab1c2; color: var(--ink); }" in stylesheet
-    assert ".site-header .button-quiet { color: #fff; }" in stylesheet
-    assert ".button-quiet:hover, .button-quiet:focus-visible { background: var(--navy); border-color: var(--navy); color: #fff; }" in stylesheet
+    body = client.get(f"/?service={service_id}").get_data(as_text=True)
+
+    assert 'id="account-filter"' in body
+    assert 'data-search=' in body
+    assert f'aria-controls="detail-{account_id}"' in body
+    assert f'id="detail-{account_id}"' in body
+    assert 'data-autosubmit' in body
+    assert f'action="/accounts/{account_id}/registered"' in body
+    assert 'name="registered"' in body
+
+
+def test_update_registered_toggles_flag_and_rejects_invalid_values(app, client):
+    service_id, account_id, _ = seed_authenticated_secret(app, client)
+
+    def stored() -> int:
+        with app.app_context():
+            conn = get_db()
+            return conn.execute(
+                "SELECT registered FROM account_service WHERE account_id=? AND service_id=?", (account_id, service_id)
+            ).fetchone()["registered"]
+
+    assert stored() == 0
+
+    accepted = client.post(f"/accounts/{account_id}/registered", data={"service_id": service_id, "registered": "1"})
+    assert accepted.status_code == 302
+    assert stored() == 1
+
+    cleared = client.post(f"/accounts/{account_id}/registered", data={"service_id": service_id, "registered": "0"})
+    assert cleared.status_code == 302
+    assert stored() == 0
+
+    invalid = client.post(f"/accounts/{account_id}/registered", data={"service_id": service_id, "registered": "sim"})
+    assert invalid.status_code == 400
+    assert stored() == 0
+
+    with app.app_context():
+        conn = get_db()
+        assert conn.execute(
+            "SELECT COUNT(*) FROM audit_events WHERE action='account.registered_updated' AND target_id=?", (str(account_id),)
+        ).fetchone()[0] == 2
+
+
+def test_add_account_with_registered_marks_only_the_active_service(app, client):
+    service_id, _, _ = seed_authenticated_secret(app, client)
+    with app.app_context():
+        conn = get_db()
+        other_service = conn.execute("INSERT INTO services (name) VALUES ('Outro serviço')").lastrowid
+        conn.commit()
+
+    created = client.post(
+        "/add",
+        data={"service_id": service_id, "email": "nova@example.test", "password": "pw", "status": "ativo", "registered": "1"},
+    )
+
+    assert created.status_code == 302
+    with app.app_context():
+        conn = get_db()
+        account_id = conn.execute("SELECT id FROM accounts WHERE email='nova@example.test'").fetchone()["id"]
+        links = {
+            row["service_id"]: (row["status"], row["registered"])
+            for row in conn.execute("SELECT service_id, status, registered FROM account_service WHERE account_id=?", (account_id,))
+        }
+        assert links[service_id] == ("ativo", 1)
+        assert links[other_service] == ("nunca", 0)
