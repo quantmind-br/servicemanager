@@ -40,25 +40,18 @@ CREATE TABLE custom_fields (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     service_id INTEGER NOT NULL,
     name TEXT NOT NULL,
-    is_secret INTEGER NOT NULL DEFAULT 1 CHECK (is_secret IN (0, 1)),
     UNIQUE (service_id, name),
     FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE CASCADE
 );
 CREATE TABLE field_values (
     field_id INTEGER NOT NULL,
     account_id INTEGER NOT NULL,
-    value_plaintext TEXT,
-    value_ciphertext BLOB,
-    value_nonce BLOB,
-    value_key_version INTEGER,
+    value_ciphertext BLOB NOT NULL,
+    value_nonce BLOB NOT NULL,
+    value_key_version INTEGER NOT NULL,
     PRIMARY KEY (field_id, account_id),
     FOREIGN KEY (field_id) REFERENCES custom_fields(id) ON DELETE CASCADE,
-    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
-    CHECK (
-        (value_plaintext IS NOT NULL AND value_ciphertext IS NULL AND value_nonce IS NULL AND value_key_version IS NULL)
-        OR
-        (value_plaintext IS NULL AND value_ciphertext IS NOT NULL AND value_nonce IS NOT NULL AND value_key_version IS NOT NULL)
-    )
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
 );
 CREATE TABLE users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,42 +100,6 @@ CREATE TRIGGER audit_events_no_delete
 BEFORE DELETE ON audit_events
 BEGIN
     SELECT RAISE(ABORT, 'audit_events is append-only');
-END;
-CREATE TRIGGER field_values_require_secret_representation_insert
-BEFORE INSERT ON field_values
-BEGIN
-    SELECT CASE
-        WHEN (SELECT is_secret FROM custom_fields WHERE id = NEW.field_id) = 1
-             AND NEW.value_plaintext IS NOT NULL
-        THEN RAISE(ABORT, 'secret field requires encrypted representation')
-        WHEN (SELECT is_secret FROM custom_fields WHERE id = NEW.field_id) = 0
-             AND NEW.value_ciphertext IS NOT NULL
-        THEN RAISE(ABORT, 'non-secret field requires plaintext representation')
-    END;
-END;
-CREATE TRIGGER custom_fields_preserve_value_representation
-BEFORE UPDATE OF is_secret ON custom_fields
-WHEN NEW.is_secret != OLD.is_secret
-  AND EXISTS (
-      SELECT 1 FROM field_values
-      WHERE field_id = OLD.id
-        AND ((NEW.is_secret = 1 AND value_plaintext IS NOT NULL)
-          OR (NEW.is_secret = 0 AND value_ciphertext IS NOT NULL))
-  )
-BEGIN
-    SELECT RAISE(ABORT, 'field secrecy classification conflicts with stored values');
-END;
-CREATE TRIGGER field_values_require_secret_representation_update
-BEFORE UPDATE ON field_values
-BEGIN
-    SELECT CASE
-        WHEN (SELECT is_secret FROM custom_fields WHERE id = NEW.field_id) = 1
-             AND NEW.value_plaintext IS NOT NULL
-        THEN RAISE(ABORT, 'secret field requires encrypted representation')
-        WHEN (SELECT is_secret FROM custom_fields WHERE id = NEW.field_id) = 0
-             AND NEW.value_ciphertext IS NOT NULL
-        THEN RAISE(ABORT, 'non-secret field requires plaintext representation')
-    END;
 END;
 """
 

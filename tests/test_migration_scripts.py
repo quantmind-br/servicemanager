@@ -143,8 +143,9 @@ def _table_rows(conn: sqlite3.Connection, table: str) -> list[tuple[object, ...]
 def test_auth_schema_migration_exposes_the_approved_api():
     migration = _script_module("migrate_auth_schema")
 
-    assert list(inspect.signature(migration.migrate).parameters) == ["source_path", "target_path", "username_map_path", "audit_key_env"]
+    assert list(inspect.signature(migration.migrate).parameters) == ["source_path", "target_path", "username_map_path", "audit_key_env", "data_key_env"]
     assert inspect.signature(migration.migrate).parameters["audit_key_env"].default == "AUDIT_KEY_V1"
+    assert inspect.signature(migration.migrate).parameters["data_key_env"].default == "DATA_KEY_V1"
 
 
 def _run_auth_migration(source: Path, target: Path, username_map: dict[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -166,7 +167,9 @@ def test_auth_schema_migration_snapshots_wal_and_preserves_every_non_totp_value(
     source_artifacts = _artifact_bytes(source)
     source_conn = sqlite3.connect(source)
     expected_audit_events = _table_rows(source_conn, "audit_events")
-    expected_business_rows = {table: _table_rows(source_conn, table) for table in ("services", "accounts", "custom_fields", "field_values", "security_events")}
+    expected_business_rows = {table: _table_rows(source_conn, table) for table in ("services", "accounts", "security_events")}
+    expected_custom_fields = [(row[0], row[1], row[2]) for row in source_conn.execute("SELECT id, service_id, name FROM custom_fields ORDER BY id")]
+    expected_field_values = [tuple(row) for row in source_conn.execute("SELECT field_id, account_id, value_ciphertext, value_nonce, value_key_version FROM field_values ORDER BY field_id, account_id")]
     # The auth-era source predates account_service.registered; the migration must append it as 0.
     expected_business_rows["account_service"] = [(*row, 0) for row in _table_rows(source_conn, "account_service")]
     expected_sequences = dict(source_conn.execute("SELECT name, seq FROM sqlite_sequence WHERE name IN ('accounts', 'services', 'custom_fields', 'users', 'security_events', 'audit_events')"))
@@ -181,6 +184,8 @@ def test_auth_schema_migration_snapshots_wal_and_preserves_every_non_totp_value(
     conn.row_factory = sqlite3.Row
     assert {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")} == {"accounts", "services", "account_service", "custom_fields", "field_values", "users", "security_events", "audit_events"}
     assert all(_table_rows(conn, table) == rows for table, rows in expected_business_rows.items())
+    assert [(row["id"], row["service_id"], row["name"]) for row in conn.execute("SELECT id, service_id, name FROM custom_fields ORDER BY id")] == expected_custom_fields
+    assert [tuple(row) for row in conn.execute("SELECT field_id, account_id, value_ciphertext, value_nonce, value_key_version FROM field_values ORDER BY field_id, account_id")] == expected_field_values
     assert _table_rows(conn, "audit_events") == expected_audit_events
     assert tuple(conn.execute("SELECT id, username, password_hash, role, is_active, must_change_password, created_at, updated_at, password_changed_at, session_version FROM users").fetchone()) == (expected_user[0], "admin", *expected_user[1:])
     assert dict(conn.execute("SELECT name, seq FROM sqlite_sequence WHERE name IN ('accounts', 'services', 'custom_fields', 'users', 'security_events', 'audit_events')")) == expected_sequences
@@ -421,7 +426,7 @@ def test_migration_creates_secure_id_preserving_target_and_handles_empty_values(
     assert conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'credentials_backup'").fetchone() is None
     assert "password" not in _table_columns(conn, "accounts")
     assert "value" not in _table_columns(conn, "field_values")
-    assert conn.execute("SELECT DISTINCT is_secret FROM custom_fields").fetchall() == [(1,)]
+    assert "is_secret" not in _table_columns(conn, "custom_fields")
     nonces = [row[0] for row in conn.execute("SELECT password_nonce FROM accounts")] + [row[0] for row in conn.execute("SELECT value_nonce FROM field_values")]
     assert len(nonces) == len(set(nonces)) == 232
     key = base64.b64decode(DATA_KEY)
@@ -935,10 +940,10 @@ def test_verifier_independently_rejects_complete_relationship_equivalence_corrup
         lambda conn: conn.execute("ALTER TABLE accounts ADD COLUMN password TEXT"),
         lambda conn: conn.execute("ALTER TABLE field_values ADD COLUMN value TEXT"),
         lambda conn: conn.execute("DROP TRIGGER audit_events_no_delete"),
-        lambda conn: conn.execute("DROP TRIGGER field_values_require_secret_representation_insert"),
+        lambda conn: conn.execute("ALTER TABLE custom_fields ADD COLUMN is_secret INTEGER"),
         lambda conn: conn.execute("CREATE TABLE unexpected_user_table (id INTEGER)"),
     ),
-    ids=("legacy-user-email-column", "legacy-password-column", "legacy-value-column", "audit-trigger", "field-trigger", "unexpected-table"),
+    ids=("legacy-user-email-column", "legacy-password-column", "legacy-value-column", "audit-trigger", "field-classification-column", "unexpected-table"),
 )
 def test_verifier_requires_the_exact_secure_user_schema_and_excludes_sqlite_internal_tables(tmp_path: Path, mutation):
     source = tmp_path / "source.db"
@@ -1220,11 +1225,11 @@ def test_migration_final_placement_failure_removes_new_target_artifacts(tmp_path
     (
         ("table", "account_service", "CHECK (status IN ('ativo', 'nunca', 'inativo'))", "CHECK (status IN ('ativo', 'nunca'))"),
         ("table", "users", "CHECK (role IN ('admin', 'operador'))", "CHECK (role IN ('admin'))"),
-        ("table", "field_values", "value_key_version IS NOT NULL)", "value_key_version IS NOT NULL OR 1)"),
+        ("table", "account_service", "CHECK (registered IN (0, 1))", "CHECK (registered IN (0, 1, 2))"),
         ("table", "account_service", "ON DELETE CASCADE", "ON DELETE RESTRICT"),
         ("trigger", "audit_events_no_update", "audit_events is append-only", "audit event mutation accepted"),
     ),
-    ids=("status-check", "role-check", "representation-check", "foreign-key", "trigger-body"),
+    ids=("status-check", "role-check", "registered-check", "foreign-key", "trigger-body"),
 )
 def test_verifier_rejects_every_canonical_secure_schema_weakening(tmp_path: Path, object_type: str, name: str, before: str, after: str):
     source = tmp_path / "source.db"
@@ -1341,3 +1346,96 @@ def test_registered_column_migration_preserves_every_value_and_rejects_migrated_
 
     with pytest.raises(migration.ScriptError):
         migration.migrate(target, tmp_path / "again.db", "AUDIT_KEY_V1")
+
+
+def _pre_cutover_source(path: Path, data_key: bytes) -> None:
+    """Build a pre-cutover database: registered + is_secret + mixed field representations + triggers."""
+    migration = _script_module("migrate_unclassified_fields")
+    expected = migration._expected_old_objects()
+    statements: list[str] = []
+    for kind in ("table", "index", "trigger"):
+        statements.extend(f"{sql};" for sql in expected[kind].values())
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.executescript("\n".join(statements))
+        stamp = "2026-01-01T00:00:00Z"
+        conn.execute("INSERT INTO users (id, username, password_hash, role, is_active, must_change_password, created_at, updated_at, password_changed_at, session_version) VALUES (1, 'admin', 'hash', 'admin', 1, 0, ?, ?, ?, 0)", (stamp, stamp, stamp))
+        conn.execute("INSERT INTO services (id, name) VALUES (5, 'Mail')")
+        conn.execute("INSERT INTO accounts (id, email, password_ciphertext, password_nonce, password_key_version) VALUES (10, 'a@example.test', ?, ?, 1)", (b"pw-cipher", b"p" * 12))
+        conn.execute("INSERT INTO account_service (account_id, service_id, status, registered) VALUES (10, 5, 'ativo', 1)")
+        plain_field = conn.execute("INSERT INTO custom_fields (id, service_id, name, is_secret) VALUES (20, 5, 'Nickname', 0)").lastrowid
+        secret_field = conn.execute("INSERT INTO custom_fields (id, service_id, name, is_secret) VALUES (21, 5, 'Token', 1)").lastrowid
+        conn.execute("INSERT INTO field_values (field_id, account_id, value_plaintext) VALUES (?, 10, 'apelido')", (plain_field,))
+        nonce = os.urandom(12)
+        ciphertext = AESGCM(data_key).encrypt(nonce, b"token-secret", b"account:10:field:21")
+        conn.execute("INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, 10, ?, ?, 1)", (secret_field, ciphertext, nonce))
+        _append_synthetic_audit_events(conn, count=3)
+        for table, seq in {"accounts": 10, "services": 5, "custom_fields": 21, "users": 1, "audit_events": 3}.items():
+            conn.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = ?", (seq, table))
+        conn.commit()
+    finally:
+        conn.close()
+    os.chmod(path, 0o600)
+
+
+def test_unclassified_fields_migration_encrypts_all_fields_and_rejects_migrated_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    data_key = base64.b64decode(DATA_KEY)
+    source = tmp_path / "pre-cutover.db"
+    target = tmp_path / "encrypted-only.db"
+    _pre_cutover_source(source, data_key)
+    source_bytes = source.read_bytes()
+
+    migration = _script_module("migrate_unclassified_fields")
+    monkeypatch.setenv("DATA_KEY_V1", DATA_KEY)
+    monkeypatch.setenv("AUDIT_KEY_V1", DATA_KEY)
+    migration.migrate(source, target, "DATA_KEY_V1", "AUDIT_KEY_V1")
+
+    assert source.read_bytes() == source_bytes
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    conn = sqlite3.connect(target)
+    conn.row_factory = sqlite3.Row
+    try:
+        from service_manager.db import schema_is_current
+        from service_manager.audit import verify_audit_chain_with_key
+        assert schema_is_current(conn)
+        assert "is_secret" not in {row[1] for row in conn.execute("PRAGMA table_info(custom_fields)")}
+        assert {row[1] for row in conn.execute("PRAGMA table_info(field_values)")} == {"field_id", "account_id", "value_ciphertext", "value_nonce", "value_key_version"}
+        values = {}
+        for row in conn.execute("SELECT field_id, account_id, value_ciphertext, value_nonce, value_key_version FROM field_values ORDER BY field_id"):
+            assert row["value_key_version"] == 1 and len(bytes(row["value_nonce"])) == 12
+            values[row["field_id"]] = AESGCM(data_key).decrypt(bytes(row["value_nonce"]), bytes(row["value_ciphertext"]), f"account:{row['account_id']}:field:{row['field_id']}".encode()).decode()
+        assert values == {20: "apelido", 21: "token-secret"}
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert list(conn.execute("PRAGMA foreign_key_check")) == []
+        assert verify_audit_chain_with_key(conn, data_key)
+        assert dict(conn.execute("SELECT name, seq FROM sqlite_sequence")) == {"accounts": 10, "services": 5, "custom_fields": 21, "users": 1, "audit_events": 3}
+        residue = _artifact_bytes(target)
+        assert b"apelido" not in residue
+    finally:
+        conn.close()
+
+    with pytest.raises(migration.ScriptError, match="source schema is incompatible"):
+        migration.migrate(target, tmp_path / "again.db", "DATA_KEY_V1", "AUDIT_KEY_V1")
+
+
+def test_unclassified_fields_migration_aborts_on_field_tampering_without_replacing_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    data_key = base64.b64decode(DATA_KEY)
+    source = tmp_path / "pre-cutover.db"
+    _pre_cutover_source(source, data_key)
+    tamper = sqlite3.connect(source)
+    tamper.execute("UPDATE field_values SET value_nonce = ? WHERE field_id = 21", (b"z" * 12,))
+    tamper.commit()
+    tamper.close()
+    target = tmp_path / "encrypted-only.db"
+    sentinel = b"preexisting-target-bytes"
+    target.write_bytes(sentinel)
+
+    migration = _script_module("migrate_unclassified_fields")
+    monkeypatch.setenv("DATA_KEY_V1", DATA_KEY)
+    monkeypatch.setenv("AUDIT_KEY_V1", DATA_KEY)
+    with pytest.raises(migration.ScriptError):
+        migration.migrate(source, target, "DATA_KEY_V1", "AUDIT_KEY_V1")
+
+    assert target.read_bytes() == sentinel
+    assert not any(tmp_path.glob(".encrypted-only.db.*.tmp*"))

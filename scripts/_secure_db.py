@@ -16,15 +16,14 @@ EXPECTED_SECURE_COLUMNS = {
     "accounts": {"id", "email", "password_ciphertext", "password_nonce", "password_key_version"},
     "services": {"id", "name"},
     "account_service": {"account_id", "service_id", "status", "registered"},
-    "custom_fields": {"id", "service_id", "name", "is_secret"},
-    "field_values": {"field_id", "account_id", "value_plaintext", "value_ciphertext", "value_nonce", "value_key_version"},
+    "custom_fields": {"id", "service_id", "name"},
+    "field_values": {"field_id", "account_id", "value_ciphertext", "value_nonce", "value_key_version"},
     "users": {"id", "username", "password_hash", "role", "is_active", "must_change_password", "created_at", "updated_at", "password_changed_at", "session_version"},
     "security_events": {"id", "kind", "subject", "source_ip", "occurred_at"},
     "audit_events": {"id", "occurred_at", "actor_user_id", "action", "target_type", "target_id", "metadata_json", "source_ip", "user_agent", "previous_hash", "event_hash"},
 }
 REQUIRED_TRIGGERS = {
-    "audit_events_no_update", "audit_events_no_delete", "field_values_require_secret_representation_insert",
-    "field_values_require_secret_representation_update", "custom_fields_preserve_value_representation",
+    "audit_events_no_update", "audit_events_no_delete",
 }
 
 
@@ -193,13 +192,11 @@ def secure_schema_structure_valid(conn: sqlite3.Connection) -> None:
 
 
 def secure_schema_valid(conn: sqlite3.Connection) -> None:
-    """Validate the schema plus the one-time controlled-migration invariants (exact counts, all-secret fields)."""
+    """Validate the schema plus the one-time controlled-migration invariants (exact counts)."""
     secure_schema_structure_valid(conn)
     try:
         if any(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] != count for table, count in EXPECTED_COUNTS.items() if table != "credentials_backup"):
             fail("target counts do not match the controlled migration")
-        if conn.execute("SELECT COUNT(*) FROM custom_fields WHERE is_secret != 1").fetchone()[0]:
-            fail("target field classification is incompatible")
     except sqlite3.Error as error:
         raise ScriptError("target schema is incompatible") from error
 

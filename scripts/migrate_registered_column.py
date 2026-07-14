@@ -43,7 +43,7 @@ _COPY_COLUMNS = {
         "id", "username", "password_hash", "role", "is_active", "must_change_password",
         "created_at", "updated_at", "password_changed_at", "session_version",
     ),
-    "custom_fields": ("id", "service_id", "name", "is_secret"),
+    "custom_fields": ("id", "service_id", "name"),
     "security_events": ("id", "kind", "subject", "source_ip", "occurred_at"),
     "audit_events": (
         "id", "occurred_at", "actor_user_id", "action", "target_type", "target_id",
@@ -95,11 +95,11 @@ def _copy(source: sqlite3.Connection, destination: sqlite3.Connection) -> tuple[
     copied["field_values"] = [
         tuple(row)
         for row in source.execute(
-            "SELECT field_id, account_id, value_plaintext, value_ciphertext, value_nonce, value_key_version FROM field_values ORDER BY field_id, account_id"
+            "SELECT field_id, account_id, value_ciphertext, value_nonce, value_key_version FROM field_values ORDER BY field_id, account_id"
         )
     ]
     destination.executemany(
-        "INSERT INTO field_values (field_id, account_id, value_plaintext, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?)",
         copied["field_values"],
     )
     sequences = {
@@ -129,7 +129,7 @@ def _validate_destination(conn: sqlite3.Connection, copied: dict[str, list[tuple
         values = [
             tuple(row)
             for row in conn.execute(
-                "SELECT field_id, account_id, value_plaintext, value_ciphertext, value_nonce, value_key_version FROM field_values ORDER BY field_id, account_id"
+                "SELECT field_id, account_id, value_ciphertext, value_nonce, value_key_version FROM field_values ORDER BY field_id, account_id"
             )
         ]
         if values != copied["field_values"]:
@@ -145,7 +145,7 @@ def _validate_destination(conn: sqlite3.Connection, copied: dict[str, list[tuple
         raise ScriptError("target validation failed") from error
 
 
-def migrate(source_path: Path, target_path: Path, audit_key_env: str = "AUDIT_KEY_V1") -> None:
+def migrate(source_path: Path, target_path: Path, audit_key_env: str = "AUDIT_KEY_V1", data_key_env: str = "DATA_KEY_V1") -> None:
     if source_path.resolve() == target_path.resolve() or not source_path.is_file() or not target_path.parent.is_dir():
         raise ScriptError("migration paths are invalid")
     require_offline_target(target_path)
@@ -203,13 +203,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source", required=True)
     parser.add_argument("--target", required=True)
     parser.add_argument("--audit-key-env", default="AUDIT_KEY_V1")
+    parser.add_argument("--data-key-env", default="DATA_KEY_V1")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        migrate(Path(args.source), Path(args.target), audit_key_env=args.audit_key_env)
+        migrate(Path(args.source), Path(args.target), audit_key_env=args.audit_key_env, data_key_env=args.data_key_env)
     except ScriptError as error:
         print(f"erro: {error}", file=sys.stderr)
         return 1

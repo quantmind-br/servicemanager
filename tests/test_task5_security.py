@@ -321,7 +321,7 @@ def test_broken_audit_chain_blocks_sensitive_mutation(app, client):
         assert get_db().execute("SELECT COUNT(*) FROM services WHERE name='Blocked'").fetchone()[0] == 0
 
 
-def test_operator_non_secret_field_request_is_forced_to_a_protected_field(app, client):
+def test_field_add_always_encrypts_the_value(app, client):
     _, service_id = authenticated_operator(app, client)
     with app.app_context():
         conn = get_db()
@@ -334,107 +334,105 @@ def test_operator_non_secret_field_request_is_forced_to_a_protected_field(app, c
 
     created = client.post(
         "/field/add",
-        data={"service": service_id, "name": "Public note", "value": "visible", "is_secret": "0", "account_ids": [account_id]},
+        data={"service": service_id, "name": "Public note", "value": "visible", "account_ids": [account_id]},
         headers=csrf_headers(client, app),
     )
 
     assert created.status_code == 302
     with app.app_context():
         conn = get_db()
+        assert "is_secret" not in {row["name"] for row in conn.execute("PRAGMA table_info(custom_fields)")}
         field_id = conn.execute("SELECT id FROM custom_fields WHERE name='Public note'").fetchone()[0]
-        assert conn.execute("SELECT is_secret FROM custom_fields WHERE id=?", (field_id,)).fetchone()[0] == 1
         row = conn.execute(
-            "SELECT value_plaintext, value_ciphertext FROM field_values WHERE field_id=? AND account_id=?", (field_id, account_id)
+            "SELECT value_ciphertext, value_nonce, value_key_version FROM field_values WHERE field_id=? AND account_id=?", (field_id, account_id)
         ).fetchone()
-        assert row["value_plaintext"] is None
         assert row["value_ciphertext"] is not None
+        assert decrypt_secret(EncryptedValue(row["value_ciphertext"], row["value_nonce"], row["value_key_version"]), aad=account_field_aad(account_id, field_id)) == "visible"
 
 
-def test_admin_can_explicitly_create_a_non_secret_field(app, client):
+def test_field_update_reencrypts_the_value(app, client):
     _, service_id = authenticated_operator(app, client, role="admin")
     with app.app_context():
         conn = get_db()
         account_id = conn.execute(
             "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
-            ("admin-field@example.test", b"ciphertext", b"0" * 12),
+            ("update-field@example.test", b"ciphertext", b"0" * 12),
         ).lastrowid
         conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (account_id, service_id))
         conn.commit()
-
-    created = client.post(
+    client.post(
         "/field/add",
-        data={"service": service_id, "name": "Admin note", "value": "visible", "is_secret": "0", "account_ids": [account_id]},
+        data={"service": service_id, "name": "Note", "value": "first", "account_ids": [account_id]},
         headers=csrf_headers(client, app),
     )
-
-    assert created.status_code == 302
+    with app.app_context():
+        field_id = get_db().execute("SELECT id FROM custom_fields WHERE name='Note'").fetchone()[0]
+    updated = client.post(
+        f"/field/update/{field_id}/{account_id}",
+        data={"service_id": service_id, "value": "second"},
+        headers=csrf_headers(client, app),
+    )
+    assert updated.status_code == 302
     with app.app_context():
         conn = get_db()
-        field_id = conn.execute("SELECT id FROM custom_fields WHERE name='Admin note'").fetchone()[0]
-        assert conn.execute("SELECT is_secret FROM custom_fields WHERE id=?", (field_id,)).fetchone()[0] == 0
-        row = conn.execute(
-            "SELECT value_plaintext, value_ciphertext FROM field_values WHERE field_id=? AND account_id=?", (field_id, account_id)
-        ).fetchone()
-        assert (row["value_plaintext"], row["value_ciphertext"]) == ("visible", None)
+        row = conn.execute("SELECT value_ciphertext, value_nonce, value_key_version FROM field_values WHERE field_id=? AND account_id=?", (field_id, account_id)).fetchone()
+        assert decrypt_secret(EncryptedValue(row["value_ciphertext"], row["value_nonce"], row["value_key_version"]), aad=account_field_aad(account_id, field_id)) == "second"
 
 
-def test_admin_reclassification_converts_every_value_and_audits_without_exposing_it(app, client):
-    user_id, service_id = authenticated_operator(app, client, role="admin")
-    created = client.post(
-        "/add",
-        data={"service": service_id, "email": "classified@example.test", "password": "account-password", "status": "ativo"},
-        headers=csrf_headers(client, app),
-    )
-    assert created.status_code == 302
+def test_removed_field_endpoints_return_404(app, client):
+    _, service_id = authenticated_operator(app, client, role="admin")
     with app.app_context():
-        account_id = get_db().execute("SELECT id FROM accounts WHERE email='classified@example.test'").fetchone()[0]
-    added = client.post(
+        conn = get_db()
+        account_id = conn.execute(
+            "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
+            ("removed@example.test", b"ciphertext", b"0" * 12),
+        ).lastrowid
+        conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (account_id, service_id))
+        conn.commit()
+    client.post(
         "/field/add",
-        data={"service": service_id, "name": "Classified", "value": "field-value", "is_secret": "1", "account_ids": [account_id]},
+        data={"service": service_id, "name": "Note", "value": "first", "account_ids": [account_id]},
         headers=csrf_headers(client, app),
     )
-    assert added.status_code == 302
     with app.app_context():
-        field_id = get_db().execute("SELECT id FROM custom_fields WHERE name='Classified'").fetchone()[0]
-
-    public = client.post(
+        field_id = get_db().execute("SELECT id FROM custom_fields WHERE name='Note'").fetchone()[0]
+    reclassify = client.post(
         f"/field/{field_id}/classification",
         data={"service_id": service_id, "is_secret": "0"},
         headers=csrf_headers(client, app),
     )
-
-    assert public.status_code == 302
-    with app.app_context():
-        conn = get_db()
-        assert conn.execute("SELECT is_secret FROM custom_fields WHERE id=?", (field_id,)).fetchone()[0] == 0
-        value = conn.execute("SELECT value_plaintext, value_ciphertext FROM field_values WHERE field_id=?", (field_id,)).fetchone()
-        assert (value["value_plaintext"], value["value_ciphertext"]) == ("field-value", None)
-        event = conn.execute("SELECT actor_user_id, action, metadata_json FROM audit_events WHERE action='field.reclassified' ORDER BY id DESC LIMIT 1").fetchone()
-        assert event["actor_user_id"] == user_id
-        assert event["metadata_json"] == '{"protected":false,"service_id":1}'
-
-    protected = client.post(
-        f"/field/{field_id}/classification",
-        data={"service_id": service_id, "is_secret": "1"},
+    assert reclassify.status_code == 404
+    reveal = client.post(
+        f"/api/accounts/{account_id}/fields/{field_id}/reveal",
         headers=csrf_headers(client, app),
     )
+    assert reveal.status_code == 404
 
-    assert protected.status_code == 302
-    with app.app_context():
-        conn = get_db()
-        value = conn.execute("SELECT value_plaintext, value_ciphertext, value_nonce, value_key_version FROM field_values WHERE field_id=?", (field_id,)).fetchone()
-        assert value["value_plaintext"] is None
-        assert decrypt_secret(EncryptedValue(value["value_ciphertext"], value["value_nonce"], value["value_key_version"]), aad=account_field_aad(account_id, field_id)) == "field-value"
 
+def test_password_reveal_works_without_recent_reauth(app, client):
+    _, service_id = authenticated_operator(app, client)
     with app.app_context():
+        from service_manager.crypto import account_password_aad, encrypt_secret
         conn = get_db()
-        conn.execute("UPDATE users SET role='operador' WHERE id=?", (user_id,))
+        envelope = encrypt_secret("account-password", aad=account_password_aad(1))
+        account_id = conn.execute(
+            "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, ?)",
+            ("reveal@example.test", envelope.ciphertext, envelope.nonce, envelope.key_version),
+        ).lastrowid
+        conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (account_id, service_id))
+        conn.commit()
+        # Re-encrypt bound to the real account id now that it is known.
+        envelope = encrypt_secret("account-password", aad=account_password_aad(account_id))
+        conn.execute("UPDATE accounts SET password_ciphertext=?, password_nonce=?, password_key_version=? WHERE id=?", (envelope.ciphertext, envelope.nonce, envelope.key_version, account_id))
         conn.commit()
     with client.session_transaction() as session:
-        session["role"] = "operador"
-    denied = client.post(
-        f"/field/{field_id}/classification",
-        data={"service_id": service_id, "is_secret": "0"},
+        session["reauthenticated_at"] = None
+    reveal = client.post(
+        f"/api/accounts/{account_id}/secrets/password/reveal",
         headers=csrf_headers(client, app),
     )
-    assert denied.status_code == 403
+    assert reveal.status_code == 200
+    payload = reveal.get_json()
+    assert payload["value"] == "account-password"
+    assert payload["expires_in"] == 30
+    assert reveal.headers["Cache-Control"] == "no-store, private"

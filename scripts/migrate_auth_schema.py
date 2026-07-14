@@ -11,6 +11,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
 from _secure_db import (
     ScriptError,
     ensure_mode,
@@ -66,9 +68,6 @@ _OLD_TRIGGERS = {
 _COPY_COLUMNS = {
     "services": ("id", "name"),
     "accounts": ("id", "email", "password_ciphertext", "password_nonce", "password_key_version"),
-    "custom_fields": ("id", "service_id", "name", "is_secret"),
-    "account_service": ("account_id", "service_id", "status"),
-    "field_values": ("field_id", "account_id", "value_plaintext", "value_ciphertext", "value_nonce", "value_key_version"),
     "security_events": ("id", "kind", "subject", "source_ip", "occurred_at"),
     "audit_events": ("id", "occurred_at", "actor_user_id", "action", "target_type", "target_id", "metadata_json", "source_ip", "user_agent", "previous_hash", "event_hash"),
 }
@@ -152,7 +151,7 @@ def _copy_rows(source: sqlite3.Connection, destination: sqlite3.Connection, tabl
     return rows
 
 
-def _copy(source: sqlite3.Connection, destination: sqlite3.Connection, usernames: dict[int, str]) -> tuple[dict[str, list[tuple[object, ...]]], list[tuple[object, ...]], dict[str, int]]:
+def _copy(source: sqlite3.Connection, destination: sqlite3.Connection, usernames: dict[int, str], data_key_env: str) -> tuple[dict[str, list[tuple[object, ...]]], list[tuple[object, ...]], dict[str, int]]:
     copied: dict[str, list[tuple[object, ...]]] = {}
     copied["services"] = _copy_rows(source, destination, "services", _COPY_COLUMNS["services"])
     copied["accounts"] = _copy_rows(source, destination, "accounts", _COPY_COLUMNS["accounts"])
@@ -161,11 +160,32 @@ def _copy(source: sqlite3.Connection, destination: sqlite3.Connection, usernames
         "INSERT INTO users (id, username, password_hash, role, is_active, must_change_password, created_at, updated_at, password_changed_at, session_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ((row[0], usernames[row[0]], *row[1:]) for row in old_users),
     )
-    copied["custom_fields"] = _copy_rows(source, destination, "custom_fields", _COPY_COLUMNS["custom_fields"])
+    copied["custom_fields"] = [tuple(row) for row in source.execute("SELECT id, service_id, name FROM custom_fields ORDER BY id")]
+    destination.executemany("INSERT INTO custom_fields (id, service_id, name) VALUES (?, ?, ?)", copied["custom_fields"])
     copied["account_service"] = [tuple(row) for row in source.execute("SELECT account_id, service_id, status FROM account_service ORDER BY account_id, service_id")]
     destination.executemany("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, ?)", copied["account_service"])
-    copied["field_values"] = [tuple(row) for row in source.execute("SELECT field_id, account_id, value_plaintext, value_ciphertext, value_nonce, value_key_version FROM field_values ORDER BY field_id, account_id")]
-    destination.executemany("INSERT INTO field_values (field_id, account_id, value_plaintext, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?, ?)", copied["field_values"])
+    field_values: list[tuple[object, ...]] = []
+    for row in source.execute("SELECT field_id, account_id, value_plaintext, value_ciphertext, value_nonce, value_key_version FROM field_values ORDER BY field_id, account_id"):
+        has_plaintext = row["value_plaintext"] is not None
+        has_envelope = row["value_ciphertext"] is not None or row["value_nonce"] is not None or row["value_key_version"] is not None
+        if has_plaintext and has_envelope:
+            raise ScriptError("source field representation is ambiguous")
+        if has_plaintext:
+            nonce = os.urandom(12)
+            ciphertext = AESGCM(load_key(data_key_env)).encrypt(nonce, str(row["value_plaintext"]).encode("utf-8"), f"account:{row['account_id']}:field:{row['field_id']}".encode())
+            key_version = 1
+        else:
+            if row["value_ciphertext"] is None or row["value_nonce"] is None or row["value_key_version"] != 1 or len(bytes(row["value_nonce"])) != 12:
+                raise ScriptError("source field envelope is invalid")
+            ciphertext = bytes(row["value_ciphertext"])
+            nonce = bytes(row["value_nonce"])
+            key_version = row["value_key_version"]
+        destination.execute(
+            "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?)",
+            (row["field_id"], row["account_id"], ciphertext, nonce, key_version),
+        )
+        field_values.append((row["field_id"], row["account_id"], ciphertext, nonce, key_version))
+    copied["field_values"] = field_values
     copied["security_events"] = _copy_rows(source, destination, "security_events", _COPY_COLUMNS["security_events"])
     copied["audit_events"] = _copy_rows(source, destination, "audit_events", _COPY_COLUMNS["audit_events"])
     sequences = {
@@ -184,10 +204,21 @@ def _validate_destination(conn: sqlite3.Connection, copied: dict[str, list[tuple
         if conn.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
             raise ScriptError("target foreign-key enforcement is disabled")
         for table, columns in _COPY_COLUMNS.items():
-            order = "id" if table not in {"account_service", "field_values"} else ("account_id, service_id" if table == "account_service" else "field_id, account_id")
-            actual = [tuple(row) for row in conn.execute(f"SELECT {', '.join(columns)} FROM {table} ORDER BY {order}")]
+            actual = [tuple(row) for row in conn.execute(f"SELECT {', '.join(columns)} FROM {table} ORDER BY id")]
             if actual != copied[table]:
                 raise ScriptError("target equivalence validation failed")
+        custom_fields = [tuple(row) for row in conn.execute("SELECT id, service_id, name FROM custom_fields ORDER BY id")]
+        if custom_fields != copied["custom_fields"]:
+            raise ScriptError("target equivalence validation failed")
+        links = [tuple(row) for row in conn.execute("SELECT account_id, service_id, status FROM account_service ORDER BY account_id, service_id")]
+        if links != copied["account_service"]:
+            raise ScriptError("target equivalence validation failed")
+        values = [
+            (row["field_id"], row["account_id"], bytes(row["value_ciphertext"]), bytes(row["value_nonce"]), row["value_key_version"])
+            for row in conn.execute("SELECT field_id, account_id, value_ciphertext, value_nonce, value_key_version FROM field_values ORDER BY field_id, account_id")
+        ]
+        if values != copied["field_values"]:
+            raise ScriptError("target equivalence validation failed")
         users = [tuple(row) for row in conn.execute("SELECT id, username, password_hash, role, is_active, must_change_password, created_at, updated_at, password_changed_at, session_version FROM users ORDER BY id")]
         expected_users = [(row[0], usernames[row[0]], *row[1:]) for row in old_users]
         if users != expected_users:
@@ -201,6 +232,7 @@ def _validate_destination(conn: sqlite3.Connection, copied: dict[str, list[tuple
             raise ScriptError("target audit chain validation failed")
     except sqlite3.Error as error:
         raise ScriptError("target validation failed") from error
+
 
 
 def _snapshot(source_path: Path, target_dir: Path) -> Path:
@@ -274,7 +306,7 @@ def _validated_counts(path: Path) -> dict[str, int]:
     finally:
         conn.close()
 
-def migrate(source_path: Path, target_path: Path, username_map_path: Path, audit_key_env: str = "AUDIT_KEY_V1") -> None:
+def migrate(source_path: Path, target_path: Path, username_map_path: Path, audit_key_env: str = "AUDIT_KEY_V1", data_key_env: str = "DATA_KEY_V1") -> None:
     if source_path.resolve() == target_path.resolve() or not source_path.is_file() or not target_path.parent.is_dir():
         raise ScriptError("migration paths are invalid")
     require_offline_target(target_path)
@@ -301,7 +333,7 @@ def migrate(source_path: Path, target_path: Path, username_map_path: Path, audit
             raise ScriptError("target foreign-key enforcement is disabled")
         destination.execute("BEGIN IMMEDIATE")
         _create_schema(destination)
-        copied, old_users, sequences = _copy(source, destination, usernames)
+        copied, old_users, sequences = _copy(source, destination, usernames, data_key_env)
         _validate_destination(destination, copied, old_users, usernames, sequences, audit_key)
         destination.commit()
         destination.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -335,13 +367,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target", required=True)
     parser.add_argument("--username-map", required=True)
     parser.add_argument("--audit-key-env", default="AUDIT_KEY_V1")
+    parser.add_argument("--data-key-env", default="DATA_KEY_V1")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        migrate(Path(args.source), Path(args.target), Path(args.username_map), args.audit_key_env)
+        migrate(Path(args.source), Path(args.target), Path(args.username_map), args.audit_key_env, args.data_key_env)
     except ScriptError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1

@@ -53,7 +53,7 @@ def _validate_target(conn: sqlite3.Connection, key: bytes, source: tuple[list[sq
     secure_schema_valid(conn)
     comparisons = (
         ("SELECT id, name FROM services ORDER BY id", [tuple(row) for row in services]),
-        ("SELECT id, service_id, name, is_secret FROM custom_fields ORDER BY id", [(*tuple(row), 1) for row in fields]),
+        ("SELECT id, service_id, name FROM custom_fields ORDER BY id", [tuple(row) for row in fields]),
         ("SELECT id, email FROM accounts ORDER BY id", [(row["id"], row["email"]) for row in accounts]),
         ("SELECT account_id, service_id, status FROM account_service ORDER BY account_id, service_id", [tuple(row) for row in links]),
     )
@@ -127,7 +127,7 @@ def migrate(
         _after_schema_created()
         services, fields, accounts, links, values = snapshot
         target.executemany("INSERT INTO services (id, name) VALUES (?, ?)", ((row["id"], row["name"]) for row in services))
-        target.executemany("INSERT INTO custom_fields (id, service_id, name, is_secret) VALUES (?, ?, ?, 1)", ((row["id"], row["service_id"], row["name"]) for row in fields))
+        target.executemany("INSERT INTO custom_fields (id, service_id, name) VALUES (?, ?, ?)", ((row["id"], row["service_id"], row["name"]) for row in fields))
         for row in accounts:
             nonce = os.urandom(12)
             target.execute("INSERT INTO accounts (id, email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, ?, 1)", (row["id"], row["email"], AESGCM(key).encrypt(nonce, row["password"].encode(), f"account:{row['id']}:password".encode()), nonce))

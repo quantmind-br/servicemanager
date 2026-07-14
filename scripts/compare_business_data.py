@@ -48,13 +48,10 @@ def _secure_rows(conn: sqlite3.Connection, key: bytes) -> dict[str, list[tuple[o
             password = AESGCM(key).decrypt(bytes(row["password_nonce"]), bytes(row["password_ciphertext"]), f"account:{row['id']}:password".encode()).decode("utf-8")
             accounts.append((row["id"], row["email"], password))
         fields = []
-        for row in conn.execute("SELECT field_id, account_id, value_plaintext, value_ciphertext, value_nonce, value_key_version FROM field_values ORDER BY field_id, account_id"):
-            if row["value_plaintext"] is not None:
-                value = row["value_plaintext"]
-            else:
-                if row["value_key_version"] != 1 or row["value_nonce"] is None or len(bytes(row["value_nonce"])) != 12:
-                    raise ScriptError("encrypted field data is invalid")
-                value = AESGCM(key).decrypt(bytes(row["value_nonce"]), bytes(row["value_ciphertext"]), f"account:{row['account_id']}:field:{row['field_id']}".encode()).decode("utf-8")
+        for row in conn.execute("SELECT field_id, account_id, value_ciphertext, value_nonce, value_key_version FROM field_values ORDER BY field_id, account_id"):
+            if row["value_key_version"] != 1 or row["value_nonce"] is None or len(bytes(row["value_nonce"])) != 12:
+                raise ScriptError("encrypted field data is invalid")
+            value = AESGCM(key).decrypt(bytes(row["value_nonce"]), bytes(row["value_ciphertext"]), f"account:{row['account_id']}:field:{row['field_id']}".encode()).decode("utf-8")
             fields.append((row["field_id"], row["account_id"], value))
         return {
             "services": [tuple(row) for row in conn.execute("SELECT id, name FROM services ORDER BY id")],

@@ -20,13 +20,13 @@ EXPECTED_COUNTS = {"accounts": 116, "account_service": 116, "field_values": 116,
 EXPECTED_TABLES = {"accounts", "services", "account_service", "custom_fields", "field_values", "users", "security_events", "audit_events"}
 EXPECTED_COLUMNS = {
     "accounts": {"id", "email", "password_ciphertext", "password_nonce", "password_key_version"}, "services": {"id", "name"},
-    "account_service": {"account_id", "service_id", "status", "registered"}, "custom_fields": {"id", "service_id", "name", "is_secret"},
-    "field_values": {"field_id", "account_id", "value_plaintext", "value_ciphertext", "value_nonce", "value_key_version"},
+    "account_service": {"account_id", "service_id", "status", "registered"}, "custom_fields": {"id", "service_id", "name"},
+    "field_values": {"field_id", "account_id", "value_ciphertext", "value_nonce", "value_key_version"},
     "users": {"id", "username", "password_hash", "role", "is_active", "must_change_password", "created_at", "updated_at", "password_changed_at", "session_version"},
     "security_events": {"id", "kind", "subject", "source_ip", "occurred_at"},
     "audit_events": {"id", "occurred_at", "actor_user_id", "action", "target_type", "target_id", "metadata_json", "source_ip", "user_agent", "previous_hash", "event_hash"},
 }
-REQUIRED_TRIGGERS = {"audit_events_no_update", "audit_events_no_delete", "field_values_require_secret_representation_insert", "field_values_require_secret_representation_update", "custom_fields_preserve_value_representation"}
+REQUIRED_TRIGGERS = {"audit_events_no_update", "audit_events_no_delete"}
 
 
 class ScriptError(RuntimeError):
@@ -126,8 +126,6 @@ def _secure(conn: sqlite3.Connection) -> None:
                 raise ScriptError("target schema is incompatible")
         if any(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] != count for table, count in EXPECTED_COUNTS.items() if table != "credentials_backup"):
             raise ScriptError("target counts are incompatible")
-        if conn.execute("SELECT COUNT(*) FROM custom_fields WHERE is_secret != 1").fetchone()[0]:
-            raise ScriptError("target field classification is incompatible")
         if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise ScriptError("target integrity is invalid")
     except sqlite3.Error as error:
@@ -138,7 +136,7 @@ def _compare(conn: sqlite3.Connection, source: tuple[list[sqlite3.Row], ...], ke
     services, fields, accounts, links, values = source
     exact = (
         ("SELECT id, name FROM services ORDER BY id", [tuple(row) for row in services]),
-        ("SELECT id, service_id, name, is_secret FROM custom_fields ORDER BY id", [(*tuple(row), 1) for row in fields]),
+        ("SELECT id, service_id, name FROM custom_fields ORDER BY id", [tuple(row) for row in fields]),
         ("SELECT id, email FROM accounts ORDER BY id", [(row["id"], row["email"]) for row in accounts]),
         ("SELECT account_id, service_id, status FROM account_service ORDER BY account_id, service_id", [tuple(row) for row in links]),
     )

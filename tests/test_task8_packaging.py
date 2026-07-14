@@ -49,8 +49,8 @@ def _build_secure_database(path: Path, *, accounts: int, disable_fk: bool = Fals
         if disable_fk:
             conn.execute("PRAGMA foreign_keys = OFF")
         conn.execute("INSERT INTO services (id, name) VALUES (1, 'Email')")
-        conn.execute("INSERT INTO custom_fields (id, service_id, name, is_secret) VALUES (1, 1, 'Recovery', 1)")
-        conn.execute("INSERT INTO custom_fields (id, service_id, name, is_secret) VALUES (2, 1, 'Nickname', 0)")
+        conn.execute("INSERT INTO custom_fields (id, service_id, name) VALUES (1, 1, 'Recovery')")
+        conn.execute("INSERT INTO custom_fields (id, service_id, name) VALUES (2, 1, 'Nickname')")
         for account_id in range(1, accounts + 1):
             conn.execute(
                 "INSERT INTO accounts (id, email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, ?, 1)",
@@ -61,7 +61,7 @@ def _build_secure_database(path: Path, *, accounts: int, disable_fk: bool = Fals
                 "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (1, ?, ?, ?, 1)",
                 (account_id, b"cipher", b"1" * 12),
             )
-            conn.execute("INSERT INTO field_values (field_id, account_id, value_plaintext) VALUES (2, ?, 'apelido')", (account_id,))
+            conn.execute("INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (2, ?, ?, ?, 1)", (account_id, b"cipher2", b"2" * 12))
         if disable_fk:
             conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (9999, 1, 'ativo')")
         conn.commit()
@@ -98,8 +98,8 @@ def test_secure_backup_restore_roundtrip_preserves_mixed_secret_fields(tmp_path:
     conn = sqlite3.connect(restored)
     try:
         assert conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 2
-        assert conn.execute("SELECT COUNT(*) FROM custom_fields WHERE is_secret = 0").fetchone()[0] == 1
-        assert conn.execute("SELECT value_plaintext FROM field_values WHERE field_id = 2 AND account_id = 1").fetchone()[0] == "apelido"
+        assert conn.execute("SELECT COUNT(*) FROM custom_fields").fetchone()[0] == 2
+        assert conn.execute("SELECT value_ciphertext FROM field_values WHERE field_id = 2 AND account_id = 1").fetchone()[0] == b"cipher2"
         assert list(conn.execute("PRAGMA foreign_key_check")) == []
     finally:
         conn.close()

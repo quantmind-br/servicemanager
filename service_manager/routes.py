@@ -7,7 +7,7 @@ import sqlite3
 
 from collections.abc import Mapping
 
-from service_manager.auth import consume_reveal_allowance, normalize_email, require_recent_reauth, source_ip
+from service_manager.auth import consume_reveal_allowance, normalize_email, source_ip
 from flask import Blueprint, Response, abort, current_app, g, jsonify, redirect, render_template, request, url_for
 from service_manager.audit import append_audit_event, verify_audit_chain
 
@@ -49,16 +49,6 @@ def _valid_name(value: str | None) -> str | None:
 
 def _valid_secret(value: str | None) -> str | None:
     return value if isinstance(value, str) and len(value) <= 4096 else None
-
-
-def _is_secret_field_request(value: str | None) -> bool | None:
-    if value is None:
-        return True
-    if value in {"1", "true", "on"}:
-        return True
-    if value in {"0", "false", "off"}:
-        return False
-    return None
 
 
 def _audit_actor() -> int | None:
@@ -170,11 +160,12 @@ def index() -> str:
             """,
             (service_id,),
         ).fetchall()
-        fields = conn.execute("SELECT id, name, is_secret FROM custom_fields WHERE service_id = ? ORDER BY name", (service_id,)).fetchall()
+        fields = conn.execute("SELECT id, name FROM custom_fields WHERE service_id = ? ORDER BY name", (service_id,)).fetchall()
         field_names = defaultdict(list)
         for row in conn.execute(
             """
-            SELECT value.account_id, value.field_id, field.name, field.is_secret, value.value_plaintext
+            SELECT value.account_id, value.field_id, field.name,
+                   value.value_ciphertext, value.value_nonce, value.value_key_version
             FROM field_values AS value
             JOIN custom_fields AS field ON field.id = value.field_id
             WHERE field.service_id = ?
@@ -182,12 +173,15 @@ def index() -> str:
             """,
             (service_id,),
         ):
+            value = decrypt_secret(
+                EncryptedValue(row["value_ciphertext"], row["value_nonce"], row["value_key_version"]),
+                aad=account_field_aad(row["account_id"], row["field_id"]),
+            )
             field_names[row["account_id"]].append(
                 {
                     "field_id": row["field_id"],
                     "name": row["name"],
-                    "is_secret": bool(row["is_secret"]),
-                    "value": row["value_plaintext"] if not row["is_secret"] else None,
+                    "value": value,
                 }
             )
         for row in sorted(account_rows, key=lambda account: (STATUS_ORDER.get(account["status"], 1), account["email"].lower())):
@@ -420,37 +414,27 @@ def field_add() -> Response:
     service_id = required_service_id()
     name = _valid_name(request.form.get("name"))
     value = _valid_secret(request.form.get("value", ""))
-    requested_secret = _is_secret_field_request(request.form.get("is_secret"))
     raw_ids = request.form.getlist("account_ids")
     try:
         account_ids = [int(raw) for raw in raw_ids]
     except (TypeError, ValueError):
         return Response("Campo inválido", status=400)
-    if name is None or value is None or requested_secret is None or not account_ids or any(account_id <= 0 for account_id in account_ids):
+    if name is None or value is None or not account_ids or any(account_id <= 0 for account_id in account_ids):
         return Response("Campo inválido", status=400)
-    if getattr(g, "current_user", None)["role"] != "admin":
-        requested_secret = True
     with transaction(conn):
         for account_id in account_ids:
             _related_account(conn, service_id, account_id)
-        field = conn.execute("SELECT id, is_secret FROM custom_fields WHERE service_id=? AND name=?", (service_id, name)).fetchone()
+        field = conn.execute("SELECT id FROM custom_fields WHERE service_id=? AND name=?", (service_id, name)).fetchone()
         field_id = field["id"] if field else conn.execute(
-            "INSERT INTO custom_fields (service_id, name, is_secret) VALUES (?, ?, ?)", (service_id, name, int(requested_secret))
+            "INSERT INTO custom_fields (service_id, name) VALUES (?, ?)", (service_id, name)
         ).lastrowid
-        is_secret = bool(field["is_secret"]) if field else requested_secret
         for account_id in account_ids:
-            if is_secret:
-                encrypted = encrypted_field_value(account_id, field_id, value)
-                conn.execute(
-                    "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?) ON CONFLICT(field_id, account_id) DO UPDATE SET value_plaintext=NULL, value_ciphertext=excluded.value_ciphertext, value_nonce=excluded.value_nonce, value_key_version=excluded.value_key_version",
-                    (field_id, account_id, *encrypted),
-                )
-            else:
-                conn.execute(
-                    "INSERT INTO field_values (field_id, account_id, value_plaintext) VALUES (?, ?, ?) ON CONFLICT(field_id, account_id) DO UPDATE SET value_plaintext=excluded.value_plaintext, value_ciphertext=NULL, value_nonce=NULL, value_key_version=NULL",
-                    (field_id, account_id, value),
-                )
-        _audit(conn, action="field.created", target_type="field", target_id=field_id, metadata={"service_id": service_id, "accounts": len(account_ids), "protected": is_secret})
+            encrypted = encrypted_field_value(account_id, field_id, value)
+            conn.execute(
+                "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?) ON CONFLICT(field_id, account_id) DO UPDATE SET value_ciphertext=excluded.value_ciphertext, value_nonce=excluded.value_nonce, value_key_version=excluded.value_key_version",
+                (field_id, account_id, *encrypted),
+            )
+        _audit(conn, action="field.created", target_type="field", target_id=field_id, metadata={"service_id": service_id, "accounts": len(account_ids)})
     return redirect(url_for("routes.index", service=service_id, fields_added=len(account_ids)))
 
 
@@ -462,85 +446,16 @@ def field_update(field_id: int, account_id: int) -> Response:
     value = _valid_secret(request.form.get("value", ""))
     if value is None:
         return Response("Campo inválido", status=400)
-    clear_secret = request.form.get("clear_secret") == "true"
     with transaction(conn):
-        field = conn.execute("SELECT is_secret FROM custom_fields WHERE id=? AND service_id=?", (field_id, service_id)).fetchone()
+        field = conn.execute("SELECT id FROM custom_fields WHERE id=? AND service_id=?", (field_id, service_id)).fetchone()
         if field is None:
             abort(404)
-        if field["is_secret"]:
-            if clear_secret:
-                value = ""
-            if clear_secret or value:
-                encrypted = encrypted_field_value(account_id, field_id, value)
-                conn.execute("INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?) ON CONFLICT(field_id, account_id) DO UPDATE SET value_plaintext=NULL, value_ciphertext=excluded.value_ciphertext, value_nonce=excluded.value_nonce, value_key_version=excluded.value_key_version", (field_id, account_id, *encrypted))
-        else:
-            conn.execute("INSERT INTO field_values (field_id, account_id, value_plaintext) VALUES (?, ?, ?) ON CONFLICT(field_id, account_id) DO UPDATE SET value_plaintext=excluded.value_plaintext, value_ciphertext=NULL, value_nonce=NULL, value_key_version=NULL", (field_id, account_id, value))
+        encrypted = encrypted_field_value(account_id, field_id, value)
+        conn.execute(
+            "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?) ON CONFLICT(field_id, account_id) DO UPDATE SET value_ciphertext=excluded.value_ciphertext, value_nonce=excluded.value_nonce, value_key_version=excluded.value_key_version",
+            (field_id, account_id, *encrypted),
+        )
         _audit(conn, action="field.updated", target_type="field_value", target_id=f"{field_id}:{account_id}", metadata={"service_id": service_id})
-    return redirect(url_for("routes.index", service=service_id))
-
-
-@routes.post("/field/<int:field_id>/classification")
-@require_role("admin")
-def field_reclassify(field_id: int) -> Response:
-    conn = get_db()
-    service_id = required_service_id()
-    requested_secret = _is_secret_field_request(request.form.get("is_secret"))
-    if requested_secret is None:
-        return Response("Campo inválido", status=400)
-    with transaction(conn):
-        field = conn.execute(
-            "SELECT id, is_secret FROM custom_fields WHERE id=? AND service_id=?", (field_id, service_id)
-        ).fetchone()
-        if field is None:
-            abort(404)
-        if bool(field["is_secret"]) != requested_secret:
-            values = conn.execute(
-                "SELECT account_id, value_plaintext, value_ciphertext, value_nonce, value_key_version FROM field_values WHERE field_id=?",
-                (field_id,),
-            ).fetchall()
-            conn.execute("DROP TRIGGER custom_fields_preserve_value_representation")
-            try:
-                conn.execute("UPDATE custom_fields SET is_secret=? WHERE id=?", (int(requested_secret), field_id))
-                for value in values:
-                    if requested_secret:
-                        encrypted = encrypted_field_value(value["account_id"], field_id, value["value_plaintext"])
-                        conn.execute(
-                            "UPDATE field_values SET value_plaintext=NULL, value_ciphertext=?, value_nonce=?, value_key_version=? WHERE field_id=? AND account_id=?",
-                            (*encrypted, field_id, value["account_id"]),
-                        )
-                    else:
-                        plaintext = decrypt_secret(
-                            EncryptedValue(value["value_ciphertext"], value["value_nonce"], value["value_key_version"]),
-                            aad=account_field_aad(value["account_id"], field_id),
-                        )
-                        conn.execute(
-                            "UPDATE field_values SET value_plaintext=?, value_ciphertext=NULL, value_nonce=NULL, value_key_version=NULL WHERE field_id=? AND account_id=?",
-                            (plaintext, field_id, value["account_id"]),
-                        )
-            finally:
-                conn.execute(
-                    """
-                    CREATE TRIGGER custom_fields_preserve_value_representation
-                    BEFORE UPDATE OF is_secret ON custom_fields
-                    WHEN NEW.is_secret != OLD.is_secret
-                      AND EXISTS (
-                          SELECT 1 FROM field_values
-                          WHERE field_id = OLD.id
-                            AND ((NEW.is_secret = 1 AND value_plaintext IS NOT NULL)
-                              OR (NEW.is_secret = 0 AND value_ciphertext IS NOT NULL))
-                      )
-                    BEGIN
-                        SELECT RAISE(ABORT, 'field secrecy classification conflicts with stored values');
-                    END;
-                    """
-                )
-            _audit(
-                conn,
-                action="field.reclassified",
-                target_type="field",
-                target_id=field_id,
-                metadata={"service_id": service_id, "protected": requested_secret},
-            )
     return redirect(url_for("routes.index", service=service_id))
 
 
@@ -561,7 +476,7 @@ def field_delete(field_id: int, account_id: int) -> Response:
 @routes.post("/api/accounts/<int:account_id>/secrets/password/reveal")
 def reveal_password(account_id: int) -> Response:
     _require_audit_chain()
-    user = require_recent_reauth()
+    user = g.current_user
     conn = get_db()
     with transaction(conn):
         if not consume_reveal_allowance(conn, user_id=user["id"], ip=source_ip()):
@@ -576,36 +491,6 @@ def reveal_password(account_id: int) -> Response:
             aad=account_password_aad(account_id),
         )
         _audit(conn, action="secret.revealed", target_type="account_password", target_id=account_id)
-    response = jsonify(value=value, expires_in=30)
-    response.headers["Cache-Control"] = "no-store, private"
-    return response
-
-
-@routes.post("/api/accounts/<int:account_id>/fields/<int:field_id>/reveal")
-def reveal_field(account_id: int, field_id: int) -> Response:
-    _require_audit_chain()
-    user = require_recent_reauth()
-    conn = get_db()
-    with transaction(conn):
-        if not consume_reveal_allowance(conn, user_id=user["id"], ip=source_ip()):
-            return Response("Muitas tentativas", status=429)
-        row = conn.execute(
-            """
-            SELECT value.value_ciphertext, value.value_nonce, value.value_key_version
-            FROM field_values AS value
-            JOIN custom_fields AS field ON field.id=value.field_id
-            JOIN account_service AS link ON link.account_id=value.account_id AND link.service_id=field.service_id
-            WHERE value.account_id=? AND value.field_id=? AND field.is_secret=1
-            """,
-            (account_id, field_id),
-        ).fetchone()
-        if row is None:
-            abort(404)
-        value = decrypt_secret(
-            EncryptedValue(row["value_ciphertext"], row["value_nonce"], row["value_key_version"]),
-            aad=account_field_aad(account_id, field_id),
-        )
-        _audit(conn, action="secret.revealed", target_type="field_value", target_id=f"{account_id}:{field_id}")
     response = jsonify(value=value, expires_in=30)
     response.headers["Cache-Control"] = "no-store, private"
     return response

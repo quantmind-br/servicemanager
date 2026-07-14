@@ -100,7 +100,7 @@ def test_healthz_is_non_secret_and_does_not_require_database_contents(client):
     assert response.get_json() == {"status": "ok"}
 
 
-def test_index_requires_authentication_and_never_renders_stored_secrets(app, client):
+def test_index_requires_authentication_and_never_renders_the_account_password(app, client):
     service_id = seed_account(app, password="known-password", field_value="known-field-value")
 
     anonymous = client.get(f"/?service={service_id}")
@@ -115,8 +115,7 @@ def test_index_requires_authentication_and_never_renders_stored_secrets(app, cli
     assert response.status_code == 200
     assert "person@example.test" in body
     assert "known-password" not in body
-    assert "known-field-value" not in body
-    assert "Protegido" in body
+    assert "known-field-value" in body
 
 
 @pytest.mark.parametrize(

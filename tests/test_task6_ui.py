@@ -59,7 +59,7 @@ def seed_authenticated_secret(app, client) -> tuple[int, int, int]:
         )
         conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (account_id, service_id))
         protected_field = conn.execute(
-            "INSERT INTO custom_fields (service_id, name, is_secret) VALUES (?, 'Token', 1)", (service_id,)
+            "INSERT INTO custom_fields (service_id, name) VALUES (?, 'Token')", (service_id,)
         ).lastrowid
         protected = encrypt_secret("known-field-secret", aad=account_field_aad(account_id, protected_field))
         conn.execute(
@@ -67,9 +67,13 @@ def seed_authenticated_secret(app, client) -> tuple[int, int, int]:
             (protected_field, account_id, protected.ciphertext, protected.nonce),
         )
         visible_field = conn.execute(
-            "INSERT INTO custom_fields (service_id, name, is_secret) VALUES (?, 'Observação', 0)", (service_id,)
+            "INSERT INTO custom_fields (service_id, name) VALUES (?, 'Observação')", (service_id,)
         ).lastrowid
-        conn.execute("INSERT INTO field_values (field_id, account_id, value_plaintext) VALUES (?, ?, 'nota pública')", (visible_field, account_id))
+        visible = encrypt_secret("nota pública", aad=account_field_aad(account_id, visible_field))
+        conn.execute(
+            "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, 1)",
+            (visible_field, account_id, visible.ciphertext, visible.nonce),
+        )
         conn.commit()
     with client.session_transaction() as session:
         now = time.time()
@@ -77,7 +81,7 @@ def seed_authenticated_secret(app, client) -> tuple[int, int, int]:
     return service_id, account_id, protected_field
 
 
-def test_authenticated_listing_uses_external_assets_and_excludes_secret_values(app, client):
+def test_authenticated_listing_uses_external_assets_and_excludes_the_account_password(app, client):
     service_id, account_id, field_id = seed_authenticated_secret(app, client)
 
     response = client.get(f"/?service={service_id}")
@@ -88,11 +92,10 @@ def test_authenticated_listing_uses_external_assets_and_excludes_secret_values(a
     assert 'href="/static/css/app.css?v=' in body
     assert 'src="/static/js/app.js?v=' in body
     assert "known-secret" not in body
-    assert "known-field-secret" not in body
+    assert "known-field-secret" in body
     assert "nota pública" in body
-    assert "Protegido" in body
     assert f"/api/accounts/{account_id}/secrets/password/reveal" in body
-    assert f"/api/accounts/{account_id}/fields/{field_id}/reveal" in body
+    assert f"/api/accounts/{account_id}/fields/{field_id}/reveal" not in body
     assert "<style" not in body
     assert "<script>" not in body
     assert "onclick=" not in body
@@ -234,7 +237,7 @@ def test_listing_restores_management_forms_without_prefilling_secrets(app, clien
     assert 'action="/service/add"' in body
     assert f'action="/service/delete/{service_id}"' in body
     assert 'action="/add"' in body
-    assert f'action="/accounts/{account_id}"' in body
+    assert f'data-update-url="/accounts/{account_id}"' in body
     assert f'action="/accounts/{account_id}/status"' in body
     assert f'action="/delete/{account_id}"' in body
     assert 'action="/field/add"' in body
@@ -243,7 +246,7 @@ def test_listing_restores_management_forms_without_prefilling_secrets(app, clien
     assert 'action="/import"' in body
     assert body.count('name="csrf_token"') >= 8
     assert 'value="known-secret"' not in body
-    assert 'value="known-field-secret"' not in body
+    assert 'value="known-field-secret"' in body
 
 
 def test_proxy_fix_trusts_forwarded_https_for_production_hsts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -271,7 +274,7 @@ def test_reveal_script_aborts_and_discards_hidden_inflight_responses(client):
     assert "AbortController" in script
     assert ".abort()" in script
     assert "document.hidden" in script
-    assert "revealGeneration" in script
+    assert "secretState" in script
 
 
 def test_creating_service_backfills_existing_account_links_for_displayed_controls(app, client):

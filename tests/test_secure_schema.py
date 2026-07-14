@@ -63,8 +63,10 @@ def test_new_database_has_the_exact_username_only_secure_schema(app):
         assert conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'bootstrap_tokens_one_active'").fetchone() is None
         assert {"password_ciphertext", "password_nonce", "password_key_version"} <= table_columns(conn, "accounts")
         assert "password" not in table_columns(conn, "accounts")
-        assert {"value_plaintext", "value_ciphertext", "value_nonce", "value_key_version"} <= table_columns(conn, "field_values")
+        assert {"value_ciphertext", "value_nonce", "value_key_version"} <= table_columns(conn, "field_values")
+        assert "value_plaintext" not in table_columns(conn, "field_values")
         assert "value" not in table_columns(conn, "field_values")
+        assert "is_secret" not in table_columns(conn, "custom_fields")
         stamp = "2026-01-01T00:00:00Z"
         conn.execute(
             "INSERT INTO users (username, password_hash, role, created_at, updated_at) VALUES (?, ?, 'admin', ?, ?)",
@@ -87,14 +89,12 @@ def test_secure_schema_constraints_and_append_only_triggers(app):
         ).lastrowid
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'other')", (account_id, service_id))
-        field_id = conn.execute("INSERT INTO custom_fields (service_id, name, is_secret) VALUES (?, 'Token', 1)", (service_id,)).lastrowid
+        field_id = conn.execute("INSERT INTO custom_fields (service_id, name) VALUES (?, 'Token')", (service_id,)).lastrowid
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
-                "INSERT INTO field_values (field_id, account_id, value_plaintext, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?, ?)",
-                (field_id, account_id, "plain", b"cipher", b"0" * 12, 1),
+                "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce) VALUES (?, ?, ?, ?)",
+                (field_id, account_id, b"cipher", b"0" * 12),
             )
-        with pytest.raises(sqlite3.IntegrityError):
-            conn.execute("INSERT INTO custom_fields (service_id, name, is_secret) VALUES (?, 'Invalid', 2)", (service_id,))
         event_id = conn.execute(
             "INSERT INTO audit_events (occurred_at, action, target_type, previous_hash, event_hash) VALUES (?, ?, ?, ?, ?)",
             ("2026-01-01T00:00:00Z", "created", "account", b"0" * 32, b"1" * 32),
@@ -105,7 +105,7 @@ def test_secure_schema_constraints_and_append_only_triggers(app):
             conn.execute("DELETE FROM audit_events WHERE id = ?", (event_id,))
 
 
-def test_field_values_require_the_representation_matching_field_secrecy(app):
+def test_custom_fields_have_no_classification_and_field_values_require_an_envelope(app):
     with app.app_context():
         conn = get_db()
         service_id = conn.execute("INSERT INTO services (name) VALUES ('Mail')").lastrowid
@@ -113,36 +113,16 @@ def test_field_values_require_the_representation_matching_field_secrecy(app):
             "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
             ("account@example.test", b"ciphertext", b"0" * 12),
         ).lastrowid
-        secret_field = conn.execute("INSERT INTO custom_fields (service_id, name, is_secret) VALUES (?, 'Secret', 1)", (service_id,)).lastrowid
-        public_field = conn.execute("INSERT INTO custom_fields (service_id, name, is_secret) VALUES (?, 'Public', 0)", (service_id,)).lastrowid
-        with pytest.raises(sqlite3.IntegrityError, match="secret field"):
-            conn.execute("INSERT INTO field_values (field_id, account_id, value_plaintext) VALUES (?, ?, ?)", (secret_field, account_id, "not allowed"))
-        with pytest.raises(sqlite3.IntegrityError, match="non-secret field"):
-            conn.execute(
-                "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?)",
-                (public_field, account_id, b"ciphertext", b"0" * 12, 1),
-            )
+        field_id = conn.execute("INSERT INTO custom_fields (service_id, name) VALUES (?, 'Token')", (service_id,)).lastrowid
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO field_values (field_id, account_id, value_nonce, value_key_version) VALUES (?, ?, ?, 1)", (field_id, account_id, b"1" * 12))
         conn.execute(
-            "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?)",
-            (secret_field, account_id, b"ciphertext", b"1" * 12, 1),
+            "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, 1)",
+            (field_id, account_id, b"ciphertext", b"1" * 12),
         )
-        conn.execute("INSERT INTO field_values (field_id, account_id, value_plaintext) VALUES (?, ?, ?)", (public_field, account_id, "displayable"))
-        with pytest.raises(sqlite3.IntegrityError, match="secret field"):
-            conn.execute("UPDATE field_values SET value_plaintext = ?, value_ciphertext = NULL, value_nonce = NULL, value_key_version = NULL WHERE field_id = ?", ("no", secret_field))
-
-
-def test_reclassifying_a_field_cannot_break_its_existing_representation(app):
-    with app.app_context():
-        conn = get_db()
-        service_id = conn.execute("INSERT INTO services (name) VALUES ('Mail')").lastrowid
-        account_id = conn.execute(
-            "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
-            ("account@example.test", b"ciphertext", b"0" * 12),
-        ).lastrowid
-        field_id = conn.execute("INSERT INTO custom_fields (service_id, name, is_secret) VALUES (?, 'Public', 0)", (service_id,)).lastrowid
-        conn.execute("INSERT INTO field_values (field_id, account_id, value_plaintext) VALUES (?, ?, ?)", (field_id, account_id, "displayable"))
-        with pytest.raises(sqlite3.IntegrityError, match="field secrecy classification"):
-            conn.execute("UPDATE custom_fields SET is_secret = 1 WHERE id = ?", (field_id,))
+        stored = conn.execute("SELECT value_ciphertext, value_nonce, value_key_version FROM field_values WHERE field_id=? AND account_id=?", (field_id, account_id)).fetchone()
+        assert bytes(stored["value_ciphertext"]) == b"ciphertext"
+        assert stored["value_key_version"] == 1
 
 
 def test_new_schema_rejects_a_database_with_any_totp_or_bootstrap_residue(tmp_path: Path):
