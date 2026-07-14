@@ -61,41 +61,15 @@ CREATE TABLE field_values (
 );
 CREATE TABLE users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('admin', 'operador')),
-    is_active INTEGER NOT NULL DEFAULT 0 CHECK (is_active IN (0, 1)),
-    must_change_password INTEGER NOT NULL DEFAULT 1 CHECK (must_change_password IN (0, 1)),
-    totp_secret_ciphertext BLOB,
-    totp_nonce BLOB,
-    totp_key_version INTEGER,
-    totp_confirmed_at TEXT,
-    last_totp_step INTEGER,
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    must_change_password INTEGER NOT NULL DEFAULT 0 CHECK (must_change_password IN (0, 1)),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     password_changed_at TEXT,
-    session_version INTEGER NOT NULL DEFAULT 0 CHECK (session_version >= 0),
-    pending_totp_secret_ciphertext BLOB,
-    pending_totp_nonce BLOB,
-    pending_totp_key_version INTEGER,
-    totp_enrollment_shown_at TEXT,
-    CHECK (
-        (totp_secret_ciphertext IS NULL AND totp_nonce IS NULL AND totp_key_version IS NULL)
-        OR
-        (totp_secret_ciphertext IS NOT NULL AND totp_nonce IS NOT NULL AND totp_key_version IS NOT NULL)
-    ),
-    CHECK (
-        (pending_totp_secret_ciphertext IS NULL AND pending_totp_nonce IS NULL AND pending_totp_key_version IS NULL)
-        OR
-        (pending_totp_secret_ciphertext IS NOT NULL AND pending_totp_nonce IS NOT NULL AND pending_totp_key_version IS NOT NULL)
-    )
-);
-CREATE TABLE recovery_codes (
-    user_id INTEGER NOT NULL,
-    code_hash TEXT NOT NULL,
-    used_at TEXT,
-    PRIMARY KEY (user_id, code_hash),
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    session_version INTEGER NOT NULL DEFAULT 0 CHECK (session_version >= 0)
 );
 CREATE TABLE security_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,15 +107,6 @@ BEFORE DELETE ON audit_events
 BEGIN
     SELECT RAISE(ABORT, 'audit_events is append-only');
 END;
-CREATE TABLE bootstrap_tokens (
-    token_hash BLOB NOT NULL UNIQUE,
-    user_id INTEGER NOT NULL UNIQUE,
-    expires_at TEXT NOT NULL,
-    consumed_at TEXT,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
-CREATE UNIQUE INDEX bootstrap_tokens_one_active
-    ON bootstrap_tokens((1)) WHERE consumed_at IS NULL;
 CREATE TRIGGER field_values_require_secret_representation_insert
 BEFORE INSERT ON field_values
 BEGIN

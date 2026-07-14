@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import create_app
-from service_manager.crypto import account_field_aad, account_password_aad, encrypt_secret, hash_password, user_totp_aad
+from service_manager.crypto import account_field_aad, account_password_aad, encrypt_secret, hash_password
 from service_manager.db import get_db
 
 
@@ -23,6 +23,7 @@ def app(tmp_path: Path):
     return create_app(
         {
             "TESTING": True,
+            "PROPAGATE_EXCEPTIONS": False,
             "DATABASE_PATH": str(tmp_path / "ui.db"),
             "DATA_KEY_V1": KEY,
             "AUDIT_KEY_V1": KEY,
@@ -42,15 +43,10 @@ def seed_authenticated_secret(app, client) -> tuple[int, int, int]:
         conn = get_db()
         stamp = datetime.now(UTC).isoformat()
         user_id = conn.execute(
-            "INSERT INTO users (email, password_hash, role, is_active, must_change_password, created_at, updated_at) "
+            "INSERT INTO users (username, password_hash, role, is_active, must_change_password, created_at, updated_at) "
             "VALUES (?, ?, 'operador', 1, 0, ?, ?)",
-            ("ui@local.invalid", hash_password("user-password"), stamp, stamp),
+            ("ui-user", hash_password("user-password"), stamp, stamp),
         ).lastrowid
-        totp = encrypt_secret("JBSWY3DPEHPK3PXP", aad=user_totp_aad(user_id))
-        conn.execute(
-            "UPDATE users SET totp_secret_ciphertext=?, totp_nonce=?, totp_key_version=1, totp_confirmed_at=? WHERE id=?",
-            (totp.ciphertext, totp.nonce, stamp, user_id),
-        )
         service_id = conn.execute("INSERT INTO services (name) VALUES ('Email')").lastrowid
         account_id = conn.execute(
             "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
@@ -140,134 +136,6 @@ def test_generic_error_pages_use_the_external_base_template(app, client):
     assert 'href="/static/css/app.css?v=' in body
     assert 'src="/static/js/app.js?v=' in body
 
-def test_bootstrap_page_can_issue_and_display_one_time_totp_enrollment(tmp_path: Path):
-    app = create_app(
-        {
-            "TESTING": True,
-            "DATABASE_PATH": str(tmp_path / "bootstrap-ui.db"),
-            "DATA_KEY_V1": KEY,
-            "AUDIT_KEY_V1": KEY,
-            "SECRET_KEY": "bootstrap-ui-session-secret",
-            "ADMIN_EMAIL": "admin@local.invalid",
-            "ADMIN_INITIAL_PASSWORD": "bootstrap-initial-password",
-            "ADMIN_BOOTSTRAP_TOKEN": "bootstrap-token-for-ui-testing",
-            "WTF_CSRF_ENABLED": False,
-        }
-    )
-    client = app.test_client()
-    response = client.get("/bootstrap")
-    body = response.get_data(as_text=True)
-
-    assert response.status_code == 200
-    assert 'data-bootstrap-enrollment' in body
-    assert 'data-bootstrap-issue-url="/bootstrap/issue-totp"' in body
-    assert 'id="totp-enrollment"' in body
-    assert 'name="totp_secret"' not in body
-    script = client.get("/static/js/app.js").get_data(as_text=True)
-    assert "data-bootstrap-enrollment" in script
-    assert "totp_secret" in script
-    assert "qr_svg_base64" in script
-
-
-def test_bootstrap_page_submits_required_totp_confirmation_code(tmp_path: Path):
-    app = create_app(
-        {
-            "TESTING": True,
-            "DATABASE_PATH": str(tmp_path / "bootstrap-totp-code-ui.db"),
-            "DATA_KEY_V1": KEY,
-            "AUDIT_KEY_V1": KEY,
-            "SECRET_KEY": "bootstrap-totp-code-ui-session-secret",
-            "ADMIN_EMAIL": "admin@local.invalid",
-            "ADMIN_INITIAL_PASSWORD": "bootstrap-initial-password",
-            "ADMIN_BOOTSTRAP_TOKEN": "bootstrap-token-for-totp-code-ui-testing",
-            "WTF_CSRF_ENABLED": False,
-        }
-    )
-
-    body = app.test_client().get("/bootstrap").get_data(as_text=True)
-
-    assert 'name="totp_code"' in body
-    assert 'autocomplete="one-time-code"' in body
-    assert 'inputmode="numeric"' in body
-    assert 'name="totp_code" type="text" autocomplete="one-time-code" inputmode="numeric" required' in body
-
-def test_listing_excludes_accounts_without_a_link_to_the_selected_service(app, client):
-    service_id, _, _ = seed_authenticated_secret(app, client)
-    with app.app_context():
-        conn = get_db()
-        unlinked_account = conn.execute(
-            "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
-            ("unlinked@example.test", b"", b"1" * 12),
-        ).lastrowid
-        conn.commit()
-
-    response = client.get(f"/?service={service_id}")
-    body = response.get_data(as_text=True)
-
-    assert response.status_code == 200
-    assert "unlinked@example.test" not in body
-    assert f'action="/accounts/{unlinked_account}"' not in body
-
-
-def test_bootstrap_totp_issue_returns_a_qr_image_for_the_server_issued_secret(tmp_path: Path):
-    app = create_app(
-        {
-            "TESTING": True,
-            "DATABASE_PATH": str(tmp_path / "bootstrap-qr.db"),
-            "DATA_KEY_V1": KEY,
-            "AUDIT_KEY_V1": KEY,
-            "SECRET_KEY": "bootstrap-qr-session-secret",
-            "ADMIN_EMAIL": "admin@local.invalid",
-            "ADMIN_INITIAL_PASSWORD": "bootstrap-initial-password",
-            "ADMIN_BOOTSTRAP_TOKEN": "bootstrap-token-for-qr-testing",
-            "WTF_CSRF_ENABLED": False,
-        }
-    )
-
-    response = app.test_client().post(
-        "/bootstrap/issue-totp",
-        data={"token": "bootstrap-token-for-qr-testing", "initial_password": "bootstrap-initial-password"},
-    )
-
-    assert response.status_code == 200
-    assert base64.b64decode(response.get_json()["qr_svg_base64"]).lstrip().endswith(b"</svg>")
-
-
-
-def test_bootstrap_confirmation_ui_preserves_enrollment_on_recoverable_error_and_shows_codes_once(tmp_path: Path):
-    app = create_app(
-        {
-            "TESTING": True,
-            "DATABASE_PATH": str(tmp_path / "bootstrap-confirm-ui.db"),
-            "DATA_KEY_V1": KEY,
-            "AUDIT_KEY_V1": KEY,
-            "SECRET_KEY": "bootstrap-confirm-session-secret",
-            "ADMIN_EMAIL": "admin@local.invalid",
-            "ADMIN_INITIAL_PASSWORD": "bootstrap-initial-password",
-            "ADMIN_BOOTSTRAP_TOKEN": "bootstrap-token-for-confirm-ui-testing",
-            "WTF_CSRF_ENABLED": False,
-        }
-    )
-
-    body = app.test_client().get("/bootstrap").get_data(as_text=True)
-    script = app.test_client().get("/static/js/app.js").get_data(as_text=True)
-
-    assert 'class="bootstrap-error"' in body
-    assert 'id="recovery-codes"' in body
-    assert 'form.addEventListener("submit"' in script
-    assert "response.status === 400" in script
-    assert "recovery_codes" in script
-    assert "secretOutput.textContent = \"\"" in script
-
-def test_bootstrap_fetches_send_csrf_only_via_header_not_restorable_form_field(client):
-    """Chrome can restore the hidden csrf_token form field to a stale value, and
-    Flask-WTF prefers the form field over the X-CSRFToken header, causing
-    "tokens do not match". Both bootstrap fetches must strip csrf_token from the
-    body so the header (from the non-restorable meta tag) is the single source."""
-    script = client.get("/static/js/app.js").get_data(as_text=True)
-    assert 'data.delete("csrf_token")' in script
-    assert script.count("body: csrfBody(form)") == 2
-    assert "body: new FormData(form)" not in script
 
 def test_standard_forms_sync_hidden_csrf_field_to_meta_token_on_load(client):
     """Standard form POSTs (login, management) carry the token only in the hidden
@@ -281,11 +149,80 @@ def test_standard_forms_sync_hidden_csrf_field_to_meta_token_on_load(client):
     assert '"pageshow"' in script                          # bfcache restore
     assert 'addEventListener("submit"' in script and ", true)" in script  # capture-phase, pre-submit
 
+
+def test_login_and_account_ui_are_username_and_password_only(app, client):
+    login = client.get("/login")
+    login_body = login.get_data(as_text=True)
+
+    assert login.status_code == 200
+    assert 'name="username"' in login_body
+    assert 'name="password"' in login_body
+    assert 'name="email"' not in login_body
+    assert "totp" not in login_body.lower()
+    assert "recovery" not in login_body.lower()
+
+    assert client.post("/login", data={"username": "admin", "password": "12345678"}).status_code == 302
+    account = client.get("/account")
+    body = account.get_data(as_text=True)
+    assert account.status_code == 200
+    assert account.headers["Cache-Control"] == "no-store, private"
+    assert 'action="/account/username"' in body
+    assert 'name="current_password"' in body
+    assert 'name="username"' in body
+    assert 'action="/account/password"' in body
+    assert 'name="new_password"' in body
+    assert 'name="new_password" minlength="16"' in body
+    index = client.get("/").get_data(as_text=True)
+    assert 'href="/account"' in index
+    assert "Minha conta" in index
+
+
+def test_forced_password_change_account_ui_omits_username_form(tmp_path: Path):
+    app = create_app(
+        {
+            "TESTING": True,
+            "DATABASE_PATH": str(tmp_path / "forced-password-change.db"),
+            "DATA_KEY_V1": KEY,
+            "AUDIT_KEY_V1": KEY,
+            "SECRET_KEY": "forced-password-change-secret",
+            "WTF_CSRF_ENABLED": False,
+            "PROPAGATE_EXCEPTIONS": False,
+        }
+    )
+    with app.app_context():
+        conn = get_db()
+        stamp = datetime.now(UTC).isoformat()
+        conn.execute(
+            "INSERT INTO users (username, password_hash, role, is_active, must_change_password, created_at, updated_at) VALUES (?, ?, 'operador', 1, 1, ?, ?)",
+            ("temporary", hash_password("12345678"), stamp, stamp),
+        )
+        conn.commit()
+
+    client = app.test_client()
+    login_response = client.post("/login", data={"username": "temporary", "password": "12345678"})
+    assert login_response.status_code == 302
+    assert login_response.headers["Location"].endswith("/account")
+    response = client.get("/account")
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert 'action="/account/username"' not in body
+    assert 'action="/account/password"' in body
+    assert "obrigatória" in body.lower()
+
+
+def test_client_assets_remove_totp_qr_recovery_and_bootstrap_code(client):
+    script = client.get("/static/js/app.js").get_data(as_text=True).lower()
+    stylesheet = client.get("/static/css/app.css").get_data(as_text=True).lower()
+
+    for obsolete in ("totp", "qr_svg", "recovery", "bootstrap", "data-bootstrap-enrollment"):
+        assert obsolete not in script
+        assert obsolete not in stylesheet
+
 def test_listing_restores_management_forms_without_prefilling_secrets(app, client):
     service_id, account_id, field_id = seed_authenticated_secret(app, client)
     with app.app_context():
         conn = get_db()
-        conn.execute("UPDATE users SET role='admin' WHERE email='ui@local.invalid'")
+        conn.execute("UPDATE users SET role='admin' WHERE username='ui-user'")
         conn.commit()
     with client.session_transaction() as session:
         session["role"] = "admin"

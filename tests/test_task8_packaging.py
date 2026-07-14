@@ -170,7 +170,7 @@ def test_restore_verifies_non_empty_audit_chain_and_succeeds(tmp_path: Path, mon
 
     conn = sqlite3.connect(restored)
     try:
-        assert conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == 2
     finally:
         conn.close()
 
@@ -325,7 +325,7 @@ def test_container_proxy_topology_preserves_client_ip_and_https_state(tmp_path: 
     assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"
     response = proxy_app.test_client().post(
         "/login",
-        data={"email": "missing@local.invalid", "password": "wrong", "totp_code": "000000"},
+        data={"username": "missing", "password": "wrong"},
         headers={"X-Forwarded-For": "198.51.100.20", "X-Forwarded-Proto": "https"},
     )
     assert response.status_code == 401

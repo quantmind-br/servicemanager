@@ -53,9 +53,10 @@ def create_app(config: Mapping[str, Any] | None = None) -> Flask:
         audit_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     configured_origin = config.get("PUBLIC_ORIGIN") if config else None
     public_origin = configured_origin if configured_origin is not None else os.environ.get("PUBLIC_ORIGIN", "https://servicemanager.quantmind.com.br")
-    bootstrap_config = {
-        name: config[name] if config and name in config else os.environ.get(name)
-        for name in ("ADMIN_EMAIL", "ADMIN_INITIAL_PASSWORD", "ADMIN_BOOTSTRAP_TOKEN")
+    seed_config = {
+        name: value
+        for name in ("ADMIN_USERNAME", "ADMIN_PASSWORD")
+        if (value := (config[name] if config and name in config else os.environ.get(name))) is not None
     }
     trusted_proxy_hops = _trusted_proxy_hops(config)
     if environment == "production" and not secret_key:
@@ -69,21 +70,21 @@ def create_app(config: Mapping[str, Any] | None = None) -> Flask:
         SECRET_KEY=secret_key or "development-only-not-for-production",
         TRUSTED_PROXY_HOPS=trusted_proxy_hops,
         MAX_CONTENT_LENGTH=5 * 1024 * 1024,
-        **bootstrap_config,
+        **seed_config,
     )
     if config:
         app.config.update(config)
     app.config["IS_PRODUCTION"] = environment == "production"
 
     init_db_app(app)
-    with app.app_context():
-        app.config["AUDIT_CHAIN_HEALTHY"] = verify_audit_chain()
-        if not app.config["AUDIT_CHAIN_HEALTHY"]:
-            app.logger.critical("audit chain verification failed during startup")
     init_csrf_app(app)
     app.register_blueprint(routes)
     app.register_blueprint(auth)
     bind_auth(app)
+    with app.app_context():
+        app.config["AUDIT_CHAIN_HEALTHY"] = verify_audit_chain()
+        if not app.config["AUDIT_CHAIN_HEALTHY"]:
+            app.logger.critical("audit chain verification failed during startup")
     app.jinja_env.globals["asset_ver"] = lambda filename: _asset_version(app.static_folder or "static", filename)
     @app.errorhandler(400)
     @app.errorhandler(403)

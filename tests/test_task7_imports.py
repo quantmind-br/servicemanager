@@ -57,9 +57,9 @@ def authenticate_admin(app, client) -> int:
         conn = get_db()
         service_id = conn.execute("INSERT INTO services (name) VALUES ('Mail')").lastrowid
         user_id = conn.execute(
-            "INSERT INTO users (email, password_hash, role, is_active, must_change_password, created_at, updated_at) "
+            "INSERT INTO users (username, password_hash, role, is_active, must_change_password, created_at, updated_at) "
             "VALUES (?, ?, 'admin', 1, 0, ?, ?)",
-            ("admin@local.invalid", hash_password("not-an-import-secret"), datetime.now(UTC).isoformat(), datetime.now(UTC).isoformat()),
+            ("import-admin", hash_password("not-an-import-secret"), datetime.now(UTC).isoformat(), datetime.now(UTC).isoformat()),
         ).lastrowid
         conn.commit()
     with client.session_transaction() as session:
@@ -236,7 +236,7 @@ def test_import_validation_error_rolls_back_entire_batch(app, client):
     assert response.headers["Location"].endswith(f"/?service={service_id}&error=validation")
     with app.app_context():
         assert get_db().execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 0
-        assert get_db().execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == 0
+        assert get_db().execute("SELECT COUNT(*) FROM audit_events WHERE action != 'bootstrap.initialized'").fetchone()[0] == 0
 
 
 def test_malformed_csv_quote_is_rejected_without_mutation(app, client):
@@ -252,7 +252,7 @@ def test_malformed_csv_quote_is_rejected_without_mutation(app, client):
     assert response.headers["Location"].endswith(f"/?service={service_id}&error=format")
     with app.app_context():
         assert get_db().execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 0
-        assert get_db().execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == 0
+        assert get_db().execute("SELECT COUNT(*) FROM audit_events WHERE action != 'bootstrap.initialized'").fetchone()[0] == 0
 
 
 
@@ -321,7 +321,7 @@ def test_upload_larger_than_five_mebibytes_returns_413_without_mutation(app, cli
 def test_operator_cannot_import_even_with_valid_csrf(app, client):
     service_id = authenticate_admin(app, client)
     with app.app_context():
-        get_db().execute("UPDATE users SET role='operador' WHERE email='admin@local.invalid'")
+        get_db().execute("UPDATE users SET role='operador' WHERE username='import-admin'")
         get_db().commit()
     with client.session_transaction() as session:
         session["role"] = "operador"
@@ -389,7 +389,7 @@ def test_unreadable_xlsx_metadata_returns_safe_format_error_without_mutation(
     assert b"unreadable metadata" not in response.data
     with app.app_context():
         assert get_db().execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 0
-        assert get_db().execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == 0
+        assert get_db().execute("SELECT COUNT(*) FROM audit_events WHERE action != 'bootstrap.initialized'").fetchone()[0] == 0
 
 
 def test_import_preserves_password_whitespace_byte_for_byte(app, client):
@@ -415,7 +415,7 @@ def test_import_preserves_password_whitespace_byte_for_byte(app, client):
 def test_operator_cannot_download_import_templates(app, client, path: str):
     authenticate_admin(app, client)
     with app.app_context():
-        get_db().execute("UPDATE users SET role='operador' WHERE email='admin@local.invalid'")
+        get_db().execute("UPDATE users SET role='operador' WHERE username='import-admin'")
         get_db().commit()
     with client.session_transaction() as session:
         session["role"] = "operador"

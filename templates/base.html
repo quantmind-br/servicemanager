@@ -12,10 +12,13 @@
   <header class="site-header">
     <a class="brand" href="{{ url_for('routes.index') }}">Service Manager</a>
     {% if g.current_user %}
-    <form class="logout-form" method="post" action="{{ url_for('auth.logout') }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button class="button button-quiet" type="submit">Sair</button>
-    </form>
+    <div class="header-actions">
+      <a class="button button-quiet" href="{{ url_for('auth.account') }}">Minha conta</a>
+      <form class="logout-form" method="post" action="{{ url_for('auth.logout') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="button button-quiet" type="submit">Sair</button>
+      </form>
+    </div>
     {% endif %}
   </header>
   <main class="page-shell">

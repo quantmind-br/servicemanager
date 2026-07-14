@@ -54,9 +54,9 @@ def authenticated_operator(app, client, *, role: str = "operador") -> tuple[int,
         conn = get_db()
         service_id = conn.execute("INSERT INTO services (name) VALUES ('Mail')").lastrowid
         user_id = conn.execute(
-            "INSERT INTO users (email, password_hash, role, is_active, must_change_password, created_at, updated_at) "
+            "INSERT INTO users (username, password_hash, role, is_active, must_change_password, created_at, updated_at) "
             "VALUES (?, ?, ?, 1, 0, ?, ?)",
-            (f"{role}@local.invalid", hash_password("not-a-secret-in-audit"), role, datetime.now(UTC).isoformat(), datetime.now(UTC).isoformat()),
+            (f"fixture-{role}", hash_password("not-a-secret-in-audit"), role, datetime.now(UTC).isoformat(), datetime.now(UTC).isoformat()),
         ).lastrowid
         conn.commit()
     with client.session_transaction() as session:
@@ -91,7 +91,7 @@ def test_valid_header_csrf_and_origin_allow_mutation_and_append_secret_free_audi
     assert response.headers["Location"].startswith("/?service=")
     with app.app_context():
         assert get_db().execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 1
-        event = get_db().execute("SELECT actor_user_id, action, target_type, metadata_json FROM audit_events").fetchone()
+        event = get_db().execute("SELECT actor_user_id, action, target_type, metadata_json FROM audit_events WHERE action='account.created'").fetchone()
         assert event["actor_user_id"] == user_id
         assert event["action"] == "account.created"
         assert event["target_type"] == "account"
@@ -174,7 +174,7 @@ def test_audit_chain_rejects_tampering_and_health_degrades(app):
         with transaction(conn):
             append_audit_event(conn, action="test.created", target_type="test", target_id="1", metadata={"count": 1})
         conn.execute("DROP TRIGGER audit_events_no_update")
-        conn.execute("UPDATE audit_events SET metadata_json='{}' WHERE id=1")
+        conn.execute("UPDATE audit_events SET metadata_json='{}' WHERE action='test.created'")
         conn.commit()
         assert not verify_audit_chain()
 
@@ -256,7 +256,7 @@ def test_broken_audit_chain_blocks_sensitive_mutation(app, client):
         with transaction(conn):
             append_audit_event(conn, action="test.created", target_type="test")
         conn.execute("DROP TRIGGER audit_events_no_update")
-        conn.execute("UPDATE audit_events SET action='tampered' WHERE id=1")
+        conn.execute("UPDATE audit_events SET action='tampered' WHERE action='test.created'")
         conn.commit()
     response = client.post(
         "/service/add",

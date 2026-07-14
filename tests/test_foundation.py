@@ -32,9 +32,9 @@ def authenticate(client, app, *, role: str = "admin") -> int:
     with app.app_context():
         now = datetime.now(UTC).isoformat()
         user_id = get_db().execute(
-            "INSERT INTO users (email, password_hash, role, is_active, must_change_password, created_at, updated_at) "
+            "INSERT INTO users (username, password_hash, role, is_active, must_change_password, created_at, updated_at) "
             "VALUES (?, ?, ?, 1, 0, ?, ?)",
-            (f"{role}@local.invalid", hash_password("foundation-test-password"), role, now, now),
+            (f"fixture-{role}", hash_password("foundation-test-password"), role, now, now),
         ).lastrowid
         get_db().commit()
     with client.session_transaction() as session:

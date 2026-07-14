@@ -5,6 +5,10 @@ import base64
 import hashlib
 import os
 import sqlite3
+import hmac
+import json
+import zlib
+import inspect
 import stat
 import subprocess
 import sys
@@ -19,6 +23,7 @@ MIGRATE = ROOT / "scripts" / "migrate_legacy_db.py"
 VERIFY = ROOT / "scripts" / "verify_migrated_db.py"
 BACKUP = ROOT / "scripts" / "backup.py"
 RESTORE = ROOT / "scripts" / "restore_backup.py"
+AUTH_MIGRATE = ROOT / "scripts" / "migrate_auth_schema.py"
 DATA_KEY = base64.b64encode(b"d" * 32).decode("ascii")
 BACKUP_KEY = base64.b64encode(b"b" * 32).decode("ascii")
 
@@ -72,6 +77,272 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 def _artifact_bytes(path: Path) -> bytes:
     return b"".join(part.read_bytes() for part in (path, Path(f"{path}-wal"), Path(f"{path}-shm")) if part.exists())
 
+
+OLD_SECURE_SCHEMA = zlib.decompress(base64.b85decode(
+    "c%1E6OK;;g5Wf3YuqVraw@A)K3i!cfg>|H@EMv1Lfh#dFH?pMa;jI6ChZH4I5+&Q)w1=Vw0yyMw9^cG-9D1^H@WRE&T`V^k5#NuC"
+    "D9?~FLGWP#GA$QBU<ZA6%*TcE6@9{A(PHP?rUeHdvE|N%Bs~xoA{Rfo$g<&Yx7nbbW&W|lXk~9U+=6AV7F%43CnU?>;xzDlmh5So"
+    "(;qonZtP`!xFZ(Dkxxe@Ug^m@(lldnRQp_sPG-MNT4821Ju;tOA7(@jR2yZ_ghbMlrlh56Rk7HPM~aUK<RmY$jt^^mzu0YDG>wYL"
+    "CsVZgh*zJGA!SVq8B>z8V?3Q#BJhPp<=SjkYF0xx8b{}fPg3&UcCh(ibtPxW!S~p~)(UUyN;3GmZGnp$4B$WstQKpm(W6*V^;D_S"
+    ">*>Mn7g-)3yk|zk;QI8QMZcf_a-C(6Xg{TS?_8am+bS!nEHZB9=(fs$Y#0TKxv;2%{e9pPIC)1B7Iia}OM?iUtze<dOG3gT(bgO-"
+    "b*Izu>Q>X`>Z+!*H3eI_Jy$%`;a17DP-|7q#TENEDqog@_|88@7d3O+RM5g&_p##w?adOs{(1|)a(7l6ww-YwM(y_<Y<%eNb^VYM"
+    "r7yEyX%<k*|K2^cC)r-t*l8Sg318+;?3C0R99YB|HBM+sf;g=y6<VG6K(ch07H$+;sAb!<aDeLc{5^?YAUo3G3wUPWSX*}<=ZT~v"
+    "eP;@RZexnY!M+r`ejGis^gsiTs2mUyaH=$#)1-Y4oFI8~pp%Ir2}X9CfkFh_v6|70yE!-@^s~`D@%tURk&q=c3Rv{worSI?*oCmQ"
+    "ISwU_pw_|z<<rDIev8_%^{8aPFSVN$k9x}&)5VA#wfQ@?dRybPFc9OJ9H>EQvM{)PaqJh^R|6gJVNm2ss!XXLgZK%WE~xKu&Y#1#"
+    "G?yGCJviEFpw?9@HP0I*x{FpywXR0N=@*VBfNGJl{N&Li{h1fZD~kd>bBi6p++qB}BJUZlj3T9+!Ba3s!kWLc;@fxXYY8Wdi<FOF"
+    "iEcCY!S_@{R!WqnwZ>1~C_V0*C(U|_8le_I>&S~(=9Qmw)$nDOswl3oRUNs?nu>@<wN{gSNEHFgf3^q)6HyJbd7OHkPN}ze_h}C0"
+    "Bz=K)&rgZ=DIm95ptR3{<^*mp;(gDgPF)ero4zG45U#SAKw+}D$jX-0yn_WkgS(xvRS8<(o@z5X<^u;>O#@JvS6;`HCFZ)(?(>=p"
+    "LuOSu*nKc9;lUP~edQu&VQ#UpSlW&Y-PTGi%MeL83x0^B@H7Pvu(dwxMnFT_xFIR!A9O>M<hMA^vpgjUu=OjAs<IUSXmTJ2(D^7W"
+    "w}j}Agrzhas9G4UvZ6Oxy%YJ$VY%$$ZlGQqQ8}enB+(Ty445s^myckz<*2+)dkIxvpk7M<EFkdeMolTyeFkYEycazdK?He~Yt!0d"
+    "$K@`lD*CzR!+w2ngI~b=a;JHS-#hkW=cj`*0!Y*yvhbH*n`h%4x~<iT55K*+$jB3}KHzfu?dp>*2m?q0kRclR=_!GE7qvl{&fYhc"
+    "o3U8*6U|sKFx!042h`xA4M;SZuHjpec;aMwq-C}{1=1y>dj%CJla{85K#zyo$oz7L?9IAan3Q<nCv)p=>*-Shep>?Fs=Ycd4sL!%"
+    "kxGM!im_p|O+!&BFJ)~F&6G^p4(chmIr~nZaTT+3Y*^+^sP#|ChX-56o|!KY<{kYUG9P&Ijpcg;fWqZk8qJ0%`-%=9x>Ww}@c&YW"
+    "{{_%KVHN"
+)).decode()
+
+
+def _append_synthetic_audit_events(conn: sqlite3.Connection, count: int = 25) -> None:
+    key = base64.b64decode(DATA_KEY)
+    previous_hash = bytes(32)
+    for event_id in range(1, count + 1):
+        occurred_at = f"2026-01-01T00:00:{event_id:02d}Z"
+        metadata_json = "{}"
+        payload = {"occurred_at": occurred_at, "actor_user_id": 1, "action": "migration.synthetic", "target_type": "database", "target_id": str(event_id), "metadata_json": metadata_json, "source_ip": None, "user_agent": None}
+        event_hash = hmac.new(key, json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8") + previous_hash, hashlib.sha256).digest()
+        conn.execute("INSERT INTO audit_events (id, occurred_at, actor_user_id, action, target_type, target_id, metadata_json, source_ip, user_agent, previous_hash, event_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (event_id, occurred_at, 1, "migration.synthetic", "database", str(event_id), metadata_json, None, None, previous_hash, event_hash))
+        previous_hash = event_hash
+
+
+def _old_secure_source(path: Path, *, users: int = 1) -> None:
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(OLD_SECURE_SCHEMA)
+        conn.execute("INSERT INTO services (id, name) VALUES (9, 'Synthetic service')")
+        conn.execute("INSERT INTO accounts (id, email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, ?, ?)", (41, "service@example.test", b"password-ciphertext", b"p" * 12, 1))
+        conn.execute("INSERT INTO custom_fields (id, service_id, name, is_secret) VALUES (12, 9, 'Token', 1)")
+        conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (41, 9, 'ativo')")
+        conn.execute("INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?)", (12, 41, b"field-ciphertext", b"f" * 12, 1))
+        stamp = "2026-01-01T00:00:00Z"
+        for user_id in range(1, users + 1):
+            conn.execute("INSERT INTO users (id, email, password_hash, role, is_active, must_change_password, totp_secret_ciphertext, totp_nonce, totp_key_version, totp_confirmed_at, last_totp_step, created_at, updated_at, password_changed_at, session_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (user_id, f"operator-{user_id}@example.test", f"argon2-hash-{user_id}", "admin" if user_id == 1 else "operador", 1, 0, b"totp-secret", b"t" * 12, 1, stamp, 77, stamp, stamp, stamp, 4))
+        conn.execute("INSERT INTO recovery_codes (user_id, code_hash) VALUES (1, 'recovery-hash')")
+        conn.execute("INSERT INTO bootstrap_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)", (b"bootstrap-token", 1, "2026-01-02T00:00:00Z"))
+        conn.execute("INSERT INTO security_events (id, kind, subject, source_ip, occurred_at) VALUES (7, 'login_failure', 'operator-1@example.test', '127.0.0.1', ?)", (stamp,))
+        _append_synthetic_audit_events(conn)
+        for table, sequence in {"accounts": 99, "services": 97, "custom_fields": 96, "users": 95, "security_events": 94, "audit_events": 93}.items():
+            conn.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = ?", (sequence, table))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _table_rows(conn: sqlite3.Connection, table: str) -> list[tuple[object, ...]]:
+    return [tuple(row) for row in conn.execute(f"SELECT * FROM {table} ORDER BY rowid")]
+
+
+
+def test_auth_schema_migration_exposes_the_approved_api():
+    migration = _script_module("migrate_auth_schema")
+
+    assert list(inspect.signature(migration.migrate).parameters) == ["source_path", "target_path", "username_map_path", "audit_key_env"]
+    assert inspect.signature(migration.migrate).parameters["audit_key_env"].default == "AUDIT_KEY_V1"
+
+
+def _run_auth_migration(source: Path, target: Path, username_map: dict[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    username_map_path = tmp_path / "username-map.json"
+    username_map_path.write_text(json.dumps(username_map), encoding="utf-8")
+    monkeypatch.setenv("AUDIT_KEY_V1", DATA_KEY)
+    migration = _script_module("migrate_auth_schema")
+    migration.migrate(source, target, username_map_path, "AUDIT_KEY_V1")
+
+
+def test_auth_schema_migration_snapshots_wal_and_preserves_every_non_totp_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source = tmp_path / "old-secure.db"
+    target = tmp_path / "new-secure.db"
+    _old_secure_source(source)
+    writer = sqlite3.connect(source)
+    writer.execute("PRAGMA journal_mode = WAL")
+    writer.execute("UPDATE services SET name = 'Confirmed WAL service' WHERE id = 9")
+    writer.commit()
+    source_artifacts = _artifact_bytes(source)
+    source_conn = sqlite3.connect(source)
+    expected_audit_events = _table_rows(source_conn, "audit_events")
+    expected_business_rows = {table: _table_rows(source_conn, table) for table in ("services", "accounts", "custom_fields", "account_service", "field_values", "security_events")}
+    expected_sequences = dict(source_conn.execute("SELECT name, seq FROM sqlite_sequence WHERE name IN ('accounts', 'services', 'custom_fields', 'users', 'security_events', 'audit_events')"))
+    expected_user = source_conn.execute("SELECT id, password_hash, role, is_active, must_change_password, created_at, updated_at, password_changed_at, session_version FROM users").fetchone()
+    source_artifacts = _artifact_bytes(source)
+
+    _run_auth_migration(source, target, {"1": "admin"}, tmp_path, monkeypatch)
+    assert source_artifacts == _artifact_bytes(source)
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert not any(path.exists() for path in _sidecars(target))
+    conn = sqlite3.connect(target)
+    conn.row_factory = sqlite3.Row
+    assert {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")} == {"accounts", "services", "account_service", "custom_fields", "field_values", "users", "security_events", "audit_events"}
+    assert all(_table_rows(conn, table) == rows for table, rows in expected_business_rows.items())
+    assert _table_rows(conn, "audit_events") == expected_audit_events
+    assert tuple(conn.execute("SELECT id, username, password_hash, role, is_active, must_change_password, created_at, updated_at, password_changed_at, session_version FROM users").fetchone()) == (expected_user[0], "admin", *expected_user[1:])
+    assert dict(conn.execute("SELECT name, seq FROM sqlite_sequence WHERE name IN ('accounts', 'services', 'custom_fields', 'users', 'security_events', 'audit_events')")) == expected_sequences
+    assert "email" not in _table_columns(conn, "users")
+    assert not {"recovery_codes", "bootstrap_tokens"} & {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert not {"totp_secret_ciphertext", "totp_nonce", "totp_key_version", "totp_confirmed_at", "last_totp_step", "pending_totp_secret_ciphertext", "pending_totp_nonce", "pending_totp_key_version", "totp_enrollment_shown_at"} & _table_columns(conn, "users")
+    assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert list(conn.execute("PRAGMA foreign_key_check")) == []
+    from service_manager.audit import verify_audit_chain_with_key
+
+    assert verify_audit_chain_with_key(conn, base64.b64decode(DATA_KEY))
+    conn.close()
+    writer.close()
+
+
+@pytest.mark.parametrize(
+    ("users", "username_map"),
+    (
+        (1, {}),
+        (1, {"1": "admin", "2": "extra"}),
+        (1, {"1": "not valid"}),
+        (2, {"1": "admin", "2": "ADMIN"}),
+    ),
+    ids=("incomplete", "extra", "invalid", "casefold-collision"),
+)
+def test_auth_schema_migration_rejects_invalid_username_maps_atomically(tmp_path: Path, users: int, username_map: dict[str, str], monkeypatch: pytest.MonkeyPatch):
+    source = tmp_path / "old-secure.db"
+    target = tmp_path / "new-secure.db"
+    _old_secure_source(source, users=users)
+    source_artifacts = _artifact_bytes(source)
+    sentinel = b"preexisting-target-bytes"
+    target.write_bytes(sentinel)
+
+    migration = _script_module("migrate_auth_schema")
+    with pytest.raises(migration.ScriptError):
+        _run_auth_migration(source, target, username_map, tmp_path, monkeypatch)
+
+    assert source_artifacts == _artifact_bytes(source)
+    assert target.read_bytes() == sentinel
+    assert not any(tmp_path.glob(".new-secure.db.*.tmp*"))
+    assert not any(path.exists() for path in _sidecars(target))
+
+def test_auth_schema_migration_preserves_empty_surviving_table_sequence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source = tmp_path / "old-secure.db"
+    target = tmp_path / "new-secure.db"
+    _old_secure_source(source)
+    conn = sqlite3.connect(source)
+    conn.execute("DELETE FROM security_events")
+    conn.commit()
+    assert conn.execute("SELECT seq FROM sqlite_sequence WHERE name = 'security_events'").fetchone()[0] == 94
+    conn.close()
+
+    _run_auth_migration(source, target, {"1": "admin"}, tmp_path, monkeypatch)
+
+    migrated = sqlite3.connect(target)
+    assert migrated.execute("SELECT seq FROM sqlite_sequence WHERE name = 'security_events'").fetchone()[0] == 94
+    migrated.close()
+
+
+@pytest.mark.parametrize(
+    ("object_type", "name", "before", "after"),
+    (
+        ("table", "users", "CHECK (role IN ('admin', 'operador'))", "CHECK (role IN ('admin'))"),
+        ("trigger", "audit_events_no_update", "audit_events is append-only", "audit mutation accepted"),
+        ("index", "bootstrap_tokens_one_active", "WHERE consumed_at IS NULL", "WHERE consumed_at IS NOT NULL"),
+    ),
+)
+def test_auth_schema_migration_rejects_old_schema_object_semantic_weakening(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, object_type: str, name: str, before: str, after: str):
+    source = tmp_path / "old-secure.db"
+    target = tmp_path / "new-secure.db"
+    _old_secure_source(source)
+    _weaken_schema_sql(source, object_type, name, before, after)
+
+    migration = _script_module("migrate_auth_schema")
+    with pytest.raises(migration.ScriptError, match="source schema"):
+        _run_auth_migration(source, target, {"1": "admin"}, tmp_path, monkeypatch)
+
+def test_auth_schema_migration_restores_existing_target_when_rollback_cleanup_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source = tmp_path / "old-secure.db"
+    target = tmp_path / "new-secure.db"
+    _old_secure_source(source)
+    sentinel = b"preexisting-target-bytes"
+    target.write_bytes(sentinel)
+    migration = _script_module("migrate_auth_schema")
+    original_remove_artifacts = migration.remove_artifacts
+
+    def fail_rollback_cleanup(*paths: Path | None) -> None:
+        if any(path is not None and path.suffix == ".rollback" for path in paths):
+            raise migration.ScriptError("temporary artifact cleanup failed")
+        original_remove_artifacts(*paths)
+
+    monkeypatch.setattr(migration, "remove_artifacts", fail_rollback_cleanup)
+    with pytest.raises(migration.ScriptError, match="recovery"):
+        _run_auth_migration(source, target, {"1": "admin"}, tmp_path, monkeypatch)
+    assert target.read_bytes() == sentinel
+
+def test_new_schema_backup_restore_round_trip_is_restorable_and_byte_for_byte_complete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source = tmp_path / "old-secure.db"
+    migrated = tmp_path / "new-secure.db"
+    encrypted = tmp_path / "new-secure.smbk"
+    restored = tmp_path / "restored.db"
+    _old_secure_source(source)
+    _run_auth_migration(source, migrated, {"1": "admin"}, tmp_path, monkeypatch)
+    backup = _script_module("backup")
+    restore = _script_module("restore_backup")
+    monkeypatch.setenv("TEST_BACKUP_KEY", BACKUP_KEY)
+    monkeypatch.setenv("AUDIT_KEY_V1", DATA_KEY)
+
+    backup.backup(migrated, encrypted, "TEST_BACKUP_KEY")
+    restore.restore(encrypted, restored, "TEST_BACKUP_KEY")
+
+    from service_manager.audit import verify_audit_chain_with_key
+    from service_manager.db import schema_is_current
+
+    assert stat.S_IMODE(restored.stat().st_mode) == 0o600
+    source_conn = sqlite3.connect(migrated)
+    restored_conn = sqlite3.connect(restored)
+    restored_conn.row_factory = sqlite3.Row
+    assert schema_is_current(restored_conn)
+    assert restored_conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert list(restored_conn.execute("PRAGMA foreign_key_check")) == []
+    assert verify_audit_chain_with_key(restored_conn, base64.b64decode(DATA_KEY))
+    tables = ("services", "accounts", "users", "custom_fields", "account_service", "field_values", "security_events", "audit_events")
+    assert all(_table_rows(source_conn, table) == _table_rows(restored_conn, table) for table in tables)
+    assert _table_rows(source_conn, "sqlite_sequence") == _table_rows(restored_conn, "sqlite_sequence")
+    source_conn.close()
+    restored_conn.close()
+
+def test_auth_schema_migration_cli_reports_safe_validated_counts(tmp_path: Path):
+    source = tmp_path / "old-secure.db"
+    target = tmp_path / "new-secure.db"
+    username_map = tmp_path / "username-map.json"
+    _old_secure_source(source)
+    username_map.write_text('{"1":"admin"}', encoding="utf-8")
+
+    result = _run(
+        AUTH_MIGRATE,
+        "--source", str(source),
+        "--target", str(target),
+        "--username-map", str(username_map),
+        env={"AUDIT_KEY_V1": DATA_KEY},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "OK: users=1 accounts=1 audit_events=25"
+
+def test_compare_business_data_reports_matching_secret_free_legacy_and_secure_digests(tmp_path: Path):
+    source = tmp_path / "legacy.db"
+    secure = tmp_path / "secure.db"
+    _legacy_source(source)
+    assert _run(MIGRATE, "--source", str(source), "--target", str(secure), "--key-env", "TEST_DATA_KEY", env={"TEST_DATA_KEY": DATA_KEY}).returncode == 0
+
+    comparison = ROOT / "scripts" / "compare_business_data.py"
+    legacy = _run(comparison, "legacy", "--database", str(source), env={})
+    encrypted = _run(comparison, "secure", "--database", str(secure), "--key-env", "TEST_DATA_KEY", env={"TEST_DATA_KEY": DATA_KEY})
+
+    assert legacy.returncode == 0, legacy.stderr
+    assert encrypted.returncode == 0, encrypted.stderr
+    legacy_result = json.loads(legacy.stdout)
+    secure_result = json.loads(encrypted.stdout)
+    assert legacy_result == secure_result
+    assert set(legacy_result) == {"counts", "sha256"}
+    assert legacy_result["counts"] == {"services": 2, "custom_fields": 2, "accounts": 116, "account_service": 116, "field_values": 116}
+    assert all(secret not in legacy.stdout + legacy.stderr + encrypted.stdout + encrypted.stderr for secret in ("migration-password-2-only", "migration-field-2-only"))
 
 def test_migration_creates_secure_id_preserving_target_and_handles_empty_values(tmp_path: Path):
     source = tmp_path / "synthetic-legacy.db"
@@ -603,15 +874,14 @@ def test_verifier_independently_rejects_complete_relationship_equivalence_corrup
 @pytest.mark.parametrize(
     "mutation",
     (
-        lambda conn: conn.execute("DROP TABLE recovery_codes"),
+        lambda conn: conn.execute("ALTER TABLE users ADD COLUMN email TEXT"),
         lambda conn: conn.execute("ALTER TABLE accounts ADD COLUMN password TEXT"),
         lambda conn: conn.execute("ALTER TABLE field_values ADD COLUMN value TEXT"),
         lambda conn: conn.execute("DROP TRIGGER audit_events_no_delete"),
         lambda conn: conn.execute("DROP TRIGGER field_values_require_secret_representation_insert"),
-        lambda conn: (conn.execute("DROP INDEX bootstrap_tokens_one_active"), conn.execute("CREATE UNIQUE INDEX bootstrap_tokens_one_active ON bootstrap_tokens(token_hash)")),
         lambda conn: conn.execute("CREATE TABLE unexpected_user_table (id INTEGER)"),
     ),
-    ids=("required-table", "legacy-password-column", "legacy-value-column", "audit-trigger", "field-trigger", "partial-bootstrap-index", "unexpected-table"),
+    ids=("legacy-user-email-column", "legacy-password-column", "legacy-value-column", "audit-trigger", "field-trigger", "unexpected-table"),
 )
 def test_verifier_requires_the_exact_secure_user_schema_and_excludes_sqlite_internal_tables(tmp_path: Path, mutation):
     source = tmp_path / "source.db"
@@ -896,9 +1166,8 @@ def test_migration_final_placement_failure_removes_new_target_artifacts(tmp_path
         ("table", "field_values", "value_key_version IS NOT NULL)", "value_key_version IS NOT NULL OR 1)"),
         ("table", "account_service", "ON DELETE CASCADE", "ON DELETE RESTRICT"),
         ("trigger", "audit_events_no_update", "audit_events is append-only", "audit event mutation accepted"),
-        ("index", "bootstrap_tokens_one_active", "WHERE consumed_at IS NULL", "WHERE consumed_at IS NOT NULL"),
     ),
-    ids=("status-check", "role-check", "representation-check", "foreign-key", "trigger-body", "partial-index"),
+    ids=("status-check", "role-check", "representation-check", "foreign-key", "trigger-body"),
 )
 def test_verifier_rejects_every_canonical_secure_schema_weakening(tmp_path: Path, object_type: str, name: str, before: str, after: str):
     source = tmp_path / "source.db"

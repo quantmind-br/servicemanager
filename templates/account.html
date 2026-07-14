@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Minha conta · Service Manager{% endblock %}
+{% block content %}
+<section class="auth-card">
+  <p class="eyebrow">Minha conta</p>
+  <h1>Gerencie seu acesso</h1>
+  <p class="muted">Login atual: <strong>{{ user.username }}</strong></p>
+  {% if user.must_change_password %}
+  <p class="account-notice">A troca de senha é obrigatória antes de continuar.</p>
+  {% else %}
+  <form method="post" action="{{ url_for('auth.change_username') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <h2>Alterar login</h2>
+    <label>Senha atual<input name="current_password" type="password" autocomplete="current-password" required maxlength="4096"></label>
+    <label>Novo login<input name="username" type="text" autocomplete="username" required minlength="3" maxlength="64"></label>
+    <button class="button" type="submit">Salvar login</button>
+  </form>
+  {% endif %}
+  <form method="post" action="{{ url_for('auth.change_password') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <h2>Alterar senha</h2>
+    <label>Senha atual<input name="current_password" type="password" autocomplete="current-password" required maxlength="4096"></label>
+    <label>Nova senha<input name="new_password" minlength="16" type="password" autocomplete="new-password" required maxlength="4096"></label>
+    <button class="button" type="submit">Salvar senha</button>
+  </form>
+</section>
+{% endblock %}

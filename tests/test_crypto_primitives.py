@@ -13,13 +13,10 @@ from service_manager.crypto import (
     CryptoError,
     account_field_aad,
     account_password_aad,
-    bootstrap_token_hash,
     decrypt_secret,
     encrypt_secret,
-    generate_bootstrap_token,
     hash_password,
     needs_password_rehash,
-    user_totp_aad,
     verify_password,
 )
 
@@ -53,7 +50,8 @@ def test_aes_gcm_round_trip_uses_unique_nonce_and_exact_aad(app):
 def test_aad_helpers_bind_to_the_exact_required_resource_identifiers():
     assert account_password_aad(7) == b"account:7:password"
     assert account_field_aad(7, 9) == b"account:7:field:9"
-    assert user_totp_aad(3) == b"user:3:totp"
+    with pytest.raises(ImportError):
+        from service_manager.crypto import user_totp_aad  # noqa: F401
 
 
 def test_crypto_authentication_failure_has_generic_error_and_no_partial_plaintext(app):
@@ -88,15 +86,3 @@ def test_argon2_hash_verify_and_rehash_contract(app):
     assert verify_password(password_hash, "incorrect") is False
     assert needs_password_rehash(password_hash) is False
     assert needs_password_rehash("$argon2id$v=19$m=8,t=1,p=1$MTIzNDU2Nzg$MTIzNDU2Nzg") is True
-
-
-def test_bootstrap_token_is_random_urlsafe_32_bytes_and_only_hash_is_persistable():
-    first = generate_bootstrap_token()
-    second = generate_bootstrap_token()
-    digest = bootstrap_token_hash(first)
-
-    assert first != second
-    assert len(base64.urlsafe_b64decode(first + "=" * (-len(first) % 4))) == 32
-    assert len(digest) == 32
-    assert digest != first.encode("utf-8")
-    assert digest == bootstrap_token_hash(first)

@@ -14,6 +14,7 @@
 body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.5 system-ui, sans-serif; }
 .site-header { align-items: center; background: var(--navy); display: flex; justify-content: space-between; min-height: 4rem; padding: 0 5vw; }
 .brand { color: #fff; font-size: 1.1rem; font-weight: 800; letter-spacing: .025em; text-decoration: none; }
+.header-actions { align-items: center; display: flex; gap: .5rem; }
 .page-shell { margin: 0 auto; max-width: 76rem; padding: 3rem 5vw 5rem; }
 .page-heading { border-bottom: 2px solid var(--navy); margin-bottom: 1.5rem; padding-bottom: 1.25rem; }
 h1, h2, p { margin-top: 0; }
@@ -49,6 +50,7 @@ input { border: 1px solid var(--line); font: inherit; padding: .6rem; }
 .reveal-value { background: #edf5f4; display: block; margin: .5rem 0; overflow-wrap: anywhere; padding: .75rem; }
 .reveal-label { color: var(--teal); font-size: .75rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
 .empty-state { color: var(--muted); }
+.account-notice { background: #fff2dc; border-left: 4px solid var(--amber); font-weight: 700; padding: .75rem 1rem; }
 @media (max-width: 40rem) { .page-shell { padding: 2rem 1rem; }.site-header { padding: 0 1rem; }.reveal-panel { bottom: 1rem; right: 1rem; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto; transition: none; } }
 .management-panel { margin-bottom: 1.5rem; }
@@ -63,10 +65,3 @@ input { border: 1px solid var(--line); font: inherit; padding: .6rem; }
 .button-danger { background: var(--rose); border-color: var(--rose); }
 .button-danger:hover, .button-danger:focus-visible { background: #7e1f34; border-color: #7e1f34; }
 select { background: var(--surface); border: 1px solid var(--line); font: inherit; padding: .6rem; }
-.totp-enrollment { background: #edf5f4; border: 1px solid var(--teal); margin: 1rem 0; padding: 1rem; }
-.bootstrap-error { color: var(--rose); font-weight: 700; margin: 1rem 0; }
-.recovery-codes { background: #edf5f4; border: 1px solid var(--teal); margin: 1rem 0; padding: 1rem; }
-.recovery-code-list { display: block; font-family: ui-monospace, monospace; font-weight: 700; overflow-wrap: anywhere; white-space: pre-wrap; }
-.totp-secret { display: block; font-family: ui-monospace, monospace; font-size: 1.1rem; font-weight: 800; overflow-wrap: anywhere; padding: .5rem 0; }
-@media (max-width: 40rem) { .form-grid { grid-template-columns: 1fr; } }
-.totp-qr { display: block; height: 256px; max-width: 100%; width: 256px; }

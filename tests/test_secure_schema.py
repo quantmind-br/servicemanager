@@ -30,16 +30,51 @@ def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
-def test_new_database_uses_only_secure_secret_columns(app):
+def test_new_database_has_the_exact_username_only_secure_schema(app):
+    expected_tables = {
+        "accounts",
+        "services",
+        "account_service",
+        "custom_fields",
+        "field_values",
+        "users",
+        "security_events",
+        "audit_events",
+    }
+    expected_user_columns = {
+        "id",
+        "username",
+        "password_hash",
+        "role",
+        "is_active",
+        "must_change_password",
+        "created_at",
+        "updated_at",
+        "password_changed_at",
+        "session_version",
+    }
+    forbidden = {"recovery_codes", "bootstrap_tokens"}
     with app.app_context():
         conn = get_db()
+        tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")}
+        assert tables == expected_tables
+        assert table_columns(conn, "users") == expected_user_columns
+        assert not tables & forbidden
+        assert conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'bootstrap_tokens_one_active'").fetchone() is None
         assert {"password_ciphertext", "password_nonce", "password_key_version"} <= table_columns(conn, "accounts")
         assert "password" not in table_columns(conn, "accounts")
         assert {"value_plaintext", "value_ciphertext", "value_nonce", "value_key_version"} <= table_columns(conn, "field_values")
         assert "value" not in table_columns(conn, "field_values")
-        assert "credentials_backup" not in {
-            row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
-        }
+        stamp = "2026-01-01T00:00:00Z"
+        conn.execute(
+            "INSERT INTO users (username, password_hash, role, created_at, updated_at) VALUES (?, ?, 'admin', ?, ?)",
+            ("tester", "hash", stamp, stamp),
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO users (username, password_hash, role, created_at, updated_at) VALUES (?, ?, 'operador', ?, ?)",
+                ("TESTER", "hash", stamp, stamp),
+            )
 
 
 def test_secure_schema_constraints_and_append_only_triggers(app):
@@ -110,29 +145,30 @@ def test_reclassifying_a_field_cannot_break_its_existing_representation(app):
             conn.execute("UPDATE custom_fields SET is_secret = 1 WHERE id = ?", (field_id,))
 
 
-def test_bootstrap_tokens_allow_only_one_active_token(app):
-    with app.app_context():
-        conn = get_db()
-        stamp = "2026-01-01T00:00:00Z"
-        first_user = conn.execute(
-            "INSERT INTO users (email, password_hash, role, created_at, updated_at) VALUES (?, ?, 'admin', ?, ?)",
-            ("first@local.invalid", "hash", stamp, stamp),
-        ).lastrowid
-        second_user = conn.execute(
-            "INSERT INTO users (email, password_hash, role, created_at, updated_at) VALUES (?, ?, 'admin', ?, ?)",
-            ("second@local.invalid", "hash", stamp, stamp),
-        ).lastrowid
-        conn.execute("INSERT INTO bootstrap_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)", (b"first", first_user, "2026-01-01T00:15:00Z"))
-        with pytest.raises(sqlite3.IntegrityError):
-            conn.execute("INSERT INTO bootstrap_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)", (b"second", second_user, "2026-01-01T00:15:00Z"))
-        conn.execute("UPDATE bootstrap_tokens SET consumed_at = ?", ("2026-01-01T00:01:00Z",))
-        conn.execute("INSERT INTO bootstrap_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)", (b"second", second_user, "2026-01-01T00:15:00Z"))
+def test_new_schema_rejects_a_database_with_any_totp_or_bootstrap_residue(tmp_path: Path):
+    database = tmp_path / "stale-secure.db"
+    stale = sqlite3.connect(database)
+    stale.executescript(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('admin', 'operador')),
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            must_change_password INTEGER NOT NULL DEFAULT 0 CHECK (must_change_password IN (0, 1)),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            password_changed_at TEXT,
+            session_version INTEGER NOT NULL DEFAULT 0 CHECK (session_version >= 0)
+        );
+        CREATE TABLE recovery_codes (user_id INTEGER NOT NULL, code_hash TEXT NOT NULL, used_at TEXT);
+        """
+    )
+    stale.close()
 
-
-def test_bootstrap_token_is_bound_to_one_initial_admin(app):
-    with app.app_context():
-        columns = table_columns(get_db(), "bootstrap_tokens")
-    assert "user_id" in columns
+    with pytest.raises(LegacySchemaError, match="incompatible"):
+        create_app({"TESTING": True, "DATABASE_PATH": str(database), "DATA_KEY_V1": "A" * 43 + "=", "SECRET_KEY": "test-session-key"})
 
 def test_get_db_configures_pragmas_and_transaction_rolls_back(app):
     with app.app_context():
@@ -193,44 +229,7 @@ def test_legacy_database_is_rejected_without_in_place_upgrade(tmp_path: Path):
     check.close()
 
 
-def test_startup_rejects_stale_secure_schema_missing_pending_enrollment_columns(tmp_path: Path):
-    from service_manager.db import SCHEMA
 
-    database = tmp_path / "stale-secure.db"
-    stale_schema = SCHEMA.replace(
-        "    pending_totp_secret_ciphertext BLOB,\n"
-        "    pending_totp_nonce BLOB,\n"
-        "    pending_totp_key_version INTEGER,\n"
-        "    totp_enrollment_shown_at TEXT,\n"
-        "    CHECK (\n"
-        "        (totp_secret_ciphertext IS NULL AND totp_nonce IS NULL AND totp_key_version IS NULL)\n"
-        "        OR\n"
-        "        (totp_secret_ciphertext IS NOT NULL AND totp_nonce IS NOT NULL AND totp_key_version IS NOT NULL)\n"
-        "    ),\n"
-        "    CHECK (\n"
-        "        (pending_totp_secret_ciphertext IS NULL AND pending_totp_nonce IS NULL AND pending_totp_key_version IS NULL)\n"
-        "        OR\n"
-        "        (pending_totp_secret_ciphertext IS NOT NULL AND pending_totp_nonce IS NOT NULL AND pending_totp_key_version IS NOT NULL)\n"
-        "    )\n",
-        "    CHECK (\n"
-        "        (totp_secret_ciphertext IS NULL AND totp_nonce IS NULL AND totp_key_version IS NULL)\n"
-        "        OR\n"
-        "        (totp_secret_ciphertext IS NOT NULL AND totp_nonce IS NOT NULL AND totp_key_version IS NOT NULL)\n"
-        "    )\n",
-    )
-    stale = sqlite3.connect(database)
-    stale.executescript(stale_schema)
-    stale.close()
-
-    with pytest.raises(LegacySchemaError, match="incompatible"):
-        create_app(
-            {
-                "TESTING": True,
-                "DATABASE_PATH": str(database),
-                "DATA_KEY_V1": "A" * 43 + "=",
-                "SECRET_KEY": "test-session-key",
-            }
-        )
 
 def test_legacy_add_route_stores_an_encrypted_password(app):
     client = app.test_client()
@@ -238,8 +237,8 @@ def test_legacy_add_route_stores_an_encrypted_password(app):
         conn = get_db()
         service_id = conn.execute("INSERT INTO services (name) VALUES ('Mail')").lastrowid
         user_id = conn.execute(
-            "INSERT INTO users (email, password_hash, role, is_active, must_change_password, created_at, updated_at) VALUES (?, ?, 'operador', 1, 0, ?, ?)",
-            ("operator@local.invalid", "unused", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+            "INSERT INTO users (username, password_hash, role, is_active, must_change_password, created_at, updated_at) VALUES (?, ?, 'operador', 1, 0, ?, ?)",
+            ("operator", "unused", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
         ).lastrowid
         conn.commit()
     with client.session_transaction() as session:

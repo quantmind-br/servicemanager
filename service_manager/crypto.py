@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import hashlib
 import secrets
 from dataclasses import dataclass
 
@@ -80,8 +79,6 @@ def account_field_aad(account_id: int, field_id: int) -> bytes:
     return f"account:{account_id}:field:{field_id}".encode("utf-8")
 
 
-def user_totp_aad(user_id: int) -> bytes:
-    return f"user:{user_id}:totp".encode("utf-8")
 
 
 def hash_password(password: str) -> str:
@@ -100,11 +97,3 @@ def needs_password_rehash(password_hash: str) -> bool:
         return _PASSWORD_HASHER.check_needs_rehash(password_hash)
     except InvalidHashError:
         return True
-
-
-def generate_bootstrap_token() -> str:
-    return secrets.token_urlsafe(32)
-
-
-def bootstrap_token_hash(token: str) -> bytes:
-    return hashlib.sha256(token.encode("utf-8")).digest()

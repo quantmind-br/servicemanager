@@ -5,10 +5,8 @@
   <p class="eyebrow">Acesso protegido</p>
   <h1>Entrar no Service Manager</h1>
   <form method="post" action="{{ url_for('auth.login') }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Email<input name="email" type="email" autocomplete="username" required maxlength="254"></label>
+    <label>Login<input name="username" type="text" autocomplete="username" required minlength="3" maxlength="64"></label>
     <label>Senha<input name="password" type="password" autocomplete="current-password" required maxlength="4096"></label>
-    <label>Código do autenticador<input name="totp_code" inputmode="numeric" autocomplete="one-time-code" maxlength="4096"></label>
     <button class="button" type="submit">Entrar</button>
   </form>
 </section>
