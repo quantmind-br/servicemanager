@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import re
 import base64
 import json
 import time
@@ -130,6 +131,22 @@ def test_https_mutation_with_origin_but_no_referer_is_allowed(app, client):
     assert missing_origin.status_code == 403
     with app.app_context():
         assert get_db().execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 1
+
+
+def test_login_form_submits_csrf_token_with_trusted_origin(app, client):
+    page = client.get("/login")
+    match = re.search(r'<input type="hidden" name="csrf_token" value="([^"]+)">', page.get_data(as_text=True))
+
+    assert page.status_code == 200
+    assert match is not None
+    response = client.post(
+        "/login",
+        data={"username": "admin", "password": "12345678", "csrf_token": match.group(1)},
+        headers={"Origin": PUBLIC_ORIGIN},
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/")
 
 def test_header_only_csrf_is_accepted_and_stale_form_token_is_rejected(app, client):
     """The bootstrap JS sends the CSRF token only via the X-CSRFToken header (the
