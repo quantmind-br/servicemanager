@@ -1,0 +1,279 @@
+from __future__ import annotations
+
+import base64
+import sys
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app import create_app
+from service_manager.crypto import account_password_aad, encrypt_secret, hash_password
+from service_manager.db import get_db
+
+
+KEY = base64.b64encode(b"u" * 32).decode("ascii")
+
+
+@pytest.fixture()
+def app(tmp_path: Path):
+    return create_app(
+        {
+            "TESTING": True,
+            "PROPAGATE_EXCEPTIONS": False,
+            "DATABASE_PATH": str(tmp_path / "uiux.db"),
+            "DATA_KEY_V1": KEY,
+            "AUDIT_KEY_V1": KEY,
+            "SECRET_KEY": "uiux-session-secret",
+            "WTF_CSRF_ENABLED": False,
+            "ADMIN_USERNAME": "admin",
+            "ADMIN_PASSWORD": "admin-password-0123456789",
+        }
+    )
+
+
+@pytest.fixture()
+def client(app):
+    return app.test_client()
+
+
+def seed_authenticated_secret(app, client) -> tuple[int, int]:
+    with app.app_context():
+        conn = get_db()
+        stamp = datetime.now(UTC).isoformat()
+        user_id = conn.execute(
+            "INSERT INTO users (username, password_hash, role, is_active, must_change_password, created_at, updated_at) "
+            "VALUES (?, ?, 'operador', 1, 0, ?, ?)",
+            ("ui-user", hash_password("user-password"), stamp, stamp),
+        ).lastrowid
+        service_id = conn.execute("INSERT INTO services (name) VALUES ('Email')").lastrowid
+        account_id = conn.execute(
+            "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
+            ("person@example.test", b"", b"0" * 12),
+        ).lastrowid
+        password = encrypt_secret("known-secret", aad=account_password_aad(account_id))
+        conn.execute(
+            "UPDATE accounts SET password_ciphertext=?, password_nonce=?, password_key_version=1 WHERE id=?",
+            (password.ciphertext, password.nonce, account_id),
+        )
+        conn.execute(
+            "INSERT INTO account_service (account_id, service_id, status, registered) VALUES (?, ?, 'ativo', 1)",
+            (account_id, service_id),
+        )
+        conn.commit()
+    with client.session_transaction() as session:
+        now = time.time()
+        session.update(
+            user_id=user_id,
+            role="operador",
+            session_version=0,
+            authenticated_at=now,
+            last_seen_at=now,
+            reauthenticated_at=now,
+        )
+    return service_id, account_id
+
+
+# ---------- Step 1: styled auth failures ----------
+
+def test_login_failure_renders_styled_page(app, client):
+    response = client.post("/login", data={"username": "admin", "password": "wrong-password-123"})
+
+    assert response.status_code == 401
+    body = response.get_data(as_text=True)
+    assert 'action="/login"' in body
+    assert 'name="csrf_token"' in body
+    assert "Credenciais inválidas." in body
+    assert "feedback-error" in body
+
+
+def test_login_rate_limit_renders_styled_page(app, client):
+    for _ in range(5):
+        client.post("/login", data={"username": "admin", "password": "wrong-password-123"})
+    response = client.post("/login", data={"username": "admin", "password": "wrong-password-123"})
+
+    assert response.status_code == 429
+    body = response.get_data(as_text=True)
+    assert "Muitas tentativas" in body
+    assert "feedback-error" in body
+
+
+def test_password_change_failure_rerenders_account(app, client):
+    seed_authenticated_secret(app, client)
+    response = client.post(
+        "/account/password",
+        data={"current_password": "definitely-wrong-pass", "new_password": "brand-new-password-1234"},
+    )
+
+    assert response.status_code == 400
+    body = response.get_data(as_text=True)
+    assert 'action="/account/password"' in body
+    assert "Não foi possível alterar a senha" in body
+    assert "feedback-error" in body
+
+
+# ---------- Step 3: registered absence defaults to 0 ----------
+
+def test_registered_absent_field_clears_flag(app, client):
+    service_id, account_id = seed_authenticated_secret(app, client)
+
+    def stored() -> int:
+        with app.app_context():
+            return get_db().execute(
+                "SELECT registered FROM account_service WHERE account_id=? AND service_id=?",
+                (account_id, service_id),
+            ).fetchone()["registered"]
+
+    assert stored() == 1
+    response = client.post(f"/accounts/{account_id}/registered", data={"service_id": service_id})
+    assert response.status_code == 302
+    assert stored() == 0
+
+
+# ---------- Step 2: success feedback via ?ok= whitelist ----------
+
+def test_mutation_success_feedback(app, client):
+    service_id, _ = seed_authenticated_secret(app, client)
+    added = client.post(
+        "/add",
+        data={"service_id": service_id, "email": "new@example.test", "password": "pw", "status": "ativo"},
+    )
+    assert added.status_code == 302
+    assert "ok=account_added" in added.headers["Location"]
+
+    body = client.get(added.headers["Location"]).get_data(as_text=True)
+    assert "Conta adicionada." in body
+    assert "data-feedback" in body
+
+
+def test_unknown_ok_code_is_ignored(app, client):
+    service_id, _ = seed_authenticated_secret(app, client)
+    response = client.get(f"/?service={service_id}&ok=bogus")
+
+    assert response.status_code == 200
+    assert "data-feedback" not in response.get_data(as_text=True)
+
+
+# ---------- Step 4/6: template + asset contract for the frontend features ----------
+
+def test_index_carries_frontend_hooks(app, client):
+    service_id, account_id = seed_authenticated_secret(app, client)
+    body = client.get(f"/?service={service_id}").get_data(as_text=True)
+
+    # fetch-update opt-in on status + registered forms
+    assert body.count("data-fetch-update") == 2
+    # addressable summary counts
+    assert 'data-count="total"' in body
+    assert 'data-count="ativo"' in body
+    # filter meta + clear
+    assert 'id="filter-count"' in body
+    assert 'id="filter-clear"' in body
+    # shared confirm dialog + toast
+    assert 'id="confirm-dialog"' in body
+    assert 'id="toast"' in body
+    # mobile card labels
+    for label in ("Senha", "Status", "Cadastro", "Ações"):
+        assert f'data-label="{label}"' in body
+    # table caption
+    assert '<caption class="sr-only">' in body
+    # noscript save fallbacks (status + registered)
+    assert body.count("<noscript>") == 2
+    # no inline style/script/onclick (CSP)
+    assert "<style" not in body
+    assert "<script>" not in body
+    assert "onclick=" not in body
+
+
+def test_service_delete_confirm_names_blast_radius_for_admin(app, client):
+    # Log in as the bootstrapped admin so the delete form renders.
+    login = client.post("/login", data={"username": "admin", "password": "admin-password-0123456789"})
+    assert login.status_code == 302
+    add = client.post("/service/add", data={"name": "Cofre"})
+    service_id = parse_qs(urlsplit(add.headers["Location"]).query)["service"][0]
+
+    body = client.get(f"/?service={service_id}").get_data(as_text=True)
+    assert "conta(s)?" in body
+    assert "«Cofre»" in body
+
+
+def test_base_template_has_favicon_and_header_user(app, client):
+    seed_authenticated_secret(app, client)
+    body = client.get("/").get_data(as_text=True)
+
+    assert 'rel="icon"' in body
+    assert "favicon.svg" in body
+    assert "header-user" in body
+
+    favicon = client.get("/static/favicon.svg")
+    assert favicon.status_code == 200
+    assert b"<svg" in favicon.get_data()
+
+
+def test_auth_templates_have_password_toggles_and_autofocus(app, client):
+    login = client.get("/login").get_data(as_text=True)
+    assert "data-password-toggle" in login
+    assert "autofocus" in login
+    assert "password-field" in login
+
+
+def test_app_js_preserves_hard_invariants_and_new_hooks(client):
+    script = client.get("/static/js/app.js").get_data(as_text=True)
+
+    # forbidden storage
+    assert "localStorage" not in script
+    assert "sessionStorage" not in script
+    # pinned invariants
+    for literal in (
+        "AbortController",
+        ".abort()",
+        "document.hidden",
+        "secretState",
+        "visibilitychange",
+        "30000",
+        "navigator.clipboard.writeText",
+        "field.value = csrfToken",
+        "syncCsrfFields(document)",
+        '"pageshow"',
+        "Math.min(expiresIn, 30) * 1000 || 30000",
+    ):
+        assert literal in script
+    # new behaviors
+    assert "data-password-toggle" in script
+    assert "data-feedback" in script
+    assert 'searchParams.has("ok")' in script
+    assert "confirm-dialog" in script
+    assert "Limite de revelações atingido" in script
+    assert "is-expiring" in script
+
+
+def test_fetch_update_builds_body_before_disabling_control(client):
+    # Disabled controls are excluded from FormData; the payload MUST be
+    # snapshotted before the control is disabled, or status/registered
+    # updates POST an empty field and the server 400s.
+    script = client.get("/static/js/app.js").get_data(as_text=True)
+    build = script.index("new URLSearchParams(new FormData(form))")
+    disable = script.index("control.disabled = true")
+    assert build < disable
+
+
+def test_mobile_cards_drop_table_min_width(client):
+    # The card layout requires min-width:0 inside the ≤48rem media query,
+    # otherwise table.accounts keeps its 48rem floor and pans horizontally.
+    css = client.get("/static/css/app.css").get_data(as_text=True)
+    media = css.index("@media (max-width: 48rem)")
+    assert "table.accounts { min-width: 0; }" in css[media:]
+
+
+def test_css_disclosure_uses_chevron_not_plus_minus(client):
+    css = client.get("/static/css/app.css").get_data(as_text=True)
+
+    assert 'content: "+ "' not in css
+    assert "\\2212" not in css
+    assert ".field-addition[open] > summary::before { transform: rotate(90deg); }" in css
+    assert ".password-toggle" in css
+    assert ".toast" in css
+    assert "@media (pointer: coarse)" in css

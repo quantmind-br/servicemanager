@@ -6,12 +6,14 @@
   <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>{% block title %}Service Manager{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css', v=asset_ver('css/app.css')) }}">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
   <script src="{{ url_for('static', filename='js/app.js', v=asset_ver('js/app.js')) }}" defer></script>
 </head>
 <body>
   <header class="site-header">
     <a class="brand" href="{{ url_for('routes.index') }}">Service Manager</a>
     {% if g.current_user %}
+    <span class="muted header-user">{{ g.current_user['username'] }}{% if g.current_user['role'] == 'admin' %} · admin{% endif %}</span>
     <div class="header-actions">
       <a class="button button-quiet" href="{{ url_for('auth.account') }}">Minha conta</a>
       <form class="logout-form" method="post" action="{{ url_for('auth.logout') }}">

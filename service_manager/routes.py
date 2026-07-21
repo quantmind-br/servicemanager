@@ -26,6 +26,18 @@ def guard_sensitive_route_mutations() -> None:
 
 STATUS_ORDER = {"ativo": 0, "nunca": 1, "inativo": 2}
 STATUS_LABELS = {"ativo": "Ativo", "nunca": "Nunca teve", "inativo": "Teve, mas inativo"}
+OK_MESSAGES = {
+    "account_added": "Conta adicionada.",
+    "account_updated": "Conta atualizada.",
+    "account_deleted": "Conta excluída.",
+    "status_updated": "Status atualizado.",
+    "registered_updated": "Cadastro atualizado.",
+    "field_added": "Campo adicionado.",
+    "field_saved": "Campo salvo.",
+    "field_deleted": "Campo excluído.",
+    "service_added": "Serviço criado.",
+    "service_deleted": "Serviço excluído.",
+}
 TEMPLATE_ROWS = [
     ("email", "password", "status"),
     ("exemplo1@gmail.com", "SenhaSegura1", "nunca"),
@@ -189,7 +201,7 @@ def index() -> str:
             rows.append({"id": row["id"], "email": row["email"], "status": row["status"], "registered": bool(row["registered"]), "fields": field_names[row["id"]]})
     counts["total"] = len(rows)
     current_name = next((service["name"] for service in services if service["id"] == service_id), None)
-    import_feedback = None
+    feedback = None
     error_kind = request.args.get("error")
     error_messages = {
         "format": "formato inválido",
@@ -197,15 +209,17 @@ def index() -> str:
         "validation": "dados inválidos",
     }
     if error_kind in error_messages:
-        import_feedback = f"Importação rejeitada: {error_messages[error_kind]}. 0 adicionadas; 0 ignoradas."
+        feedback = f"Importação rejeitada: {error_messages[error_kind]}. 0 adicionadas; 0 ignoradas."
     elif request.args.get("added") is not None or request.args.get("skipped") is not None:
         try:
             added = max(0, int(request.args.get("added", "0")))
             skipped = max(0, int(request.args.get("skipped", "0")))
         except ValueError:
             abort(400)
-        import_feedback = f"Importação concluída: {added} adicionadas; {skipped} ignoradas."
-    return render_template("index.html", rows=rows, labels=STATUS_LABELS, counts=counts, services=services, current=service_id, current_name=current_name, service_fields=fields, import_feedback=import_feedback)
+        feedback = f"Importação concluída: {added} adicionadas; {skipped} ignoradas."
+    elif (ok := request.args.get("ok")) in OK_MESSAGES:
+        feedback = OK_MESSAGES[ok]
+    return render_template("index.html", rows=rows, labels=STATUS_LABELS, counts=counts, services=services, current=service_id, current_name=current_name, service_fields=fields, feedback=feedback)
 
 
 @routes.post("/add")
@@ -235,7 +249,7 @@ def add() -> Response:
         if "UNIQUE" in str(error).upper():
             return Response("Email já cadastrado", status=400)
         raise
-    return redirect(url_for("routes.index", service=service_id))
+    return redirect(url_for("routes.index", service=service_id, ok="account_added"))
 
 
 @routes.get("/template.csv")
@@ -333,7 +347,7 @@ def update(item_id: int) -> Response:
         if "UNIQUE" in str(error).upper():
             return Response("Email já cadastrado", status=400)
         raise
-    return redirect(url_for("routes.index", service=service_id))
+    return redirect(url_for("routes.index", service=service_id, ok="account_updated"))
 
 
 @routes.post("/accounts/<int:item_id>/status")
@@ -347,7 +361,7 @@ def update_status(item_id: int) -> Response:
     with transaction(conn):
         conn.execute("UPDATE account_service SET status=? WHERE account_id=? AND service_id=?", (status, item_id, service_id))
         _audit(conn, action="account.status_updated", target_type="account", target_id=item_id, metadata={"service_id": service_id})
-    return redirect(url_for("routes.index", service=service_id))
+    return redirect(url_for("routes.index", service=service_id, ok="status_updated"))
 
 
 @routes.post("/accounts/<int:item_id>/registered")
@@ -355,14 +369,14 @@ def update_registered(item_id: int) -> Response:
     conn = get_db()
     service_id = required_service_id()
     _related_account(conn, service_id, item_id)
-    raw = request.form.get("registered")
+    raw = request.form.get("registered", "0")
     if raw not in {"0", "1"}:
         return Response("Cadastro inválido", status=400)
     registered = int(raw)
     with transaction(conn):
         conn.execute("UPDATE account_service SET registered=? WHERE account_id=? AND service_id=?", (registered, item_id, service_id))
         _audit(conn, action="account.registered_updated", target_type="account", target_id=item_id, metadata={"service_id": service_id, "registered": registered})
-    return redirect(url_for("routes.index", service=service_id))
+    return redirect(url_for("routes.index", service=service_id, ok="registered_updated"))
 
 @routes.post("/delete/<int:item_id>")
 @require_role("admin")
@@ -373,7 +387,7 @@ def delete(item_id: int) -> Response:
     with transaction(conn):
         conn.execute("DELETE FROM accounts WHERE id = ?", (item_id,))
         _audit(conn, action="account.deleted", target_type="account", target_id=item_id, metadata={"service_id": service_id})
-    return redirect(url_for("routes.index", service=service_id))
+    return redirect(url_for("routes.index", service=service_id, ok="account_deleted"))
 
 
 @routes.post("/service/add")
@@ -393,7 +407,7 @@ def service_add() -> Response:
             _audit(conn, action="service.created", target_type="service", target_id=service_id)
         else:
             service_id = existing["id"]
-    return redirect(url_for("routes.index", service=service_id))
+    return redirect(url_for("routes.index", ok="service_added", service=service_id))
 
 
 @routes.post("/service/delete/<int:service_id>")
@@ -405,7 +419,7 @@ def service_delete(service_id: int) -> Response:
             abort(404)
         conn.execute("DELETE FROM services WHERE id = ?", (service_id,))
         _audit(conn, action="service.deleted", target_type="service", target_id=service_id)
-    return redirect(url_for("routes.index"))
+    return redirect(url_for("routes.index", ok="service_deleted"))
 
 
 @routes.post("/field/add")
@@ -435,7 +449,7 @@ def field_add() -> Response:
                 (field_id, account_id, *encrypted),
             )
         _audit(conn, action="field.created", target_type="field", target_id=field_id, metadata={"service_id": service_id, "accounts": len(account_ids)})
-    return redirect(url_for("routes.index", service=service_id, fields_added=len(account_ids)))
+    return redirect(url_for("routes.index", service=service_id, ok="field_added"))
 
 
 @routes.post("/field/update/<int:field_id>/<int:account_id>")
@@ -456,7 +470,7 @@ def field_update(field_id: int, account_id: int) -> Response:
             (field_id, account_id, *encrypted),
         )
         _audit(conn, action="field.updated", target_type="field_value", target_id=f"{field_id}:{account_id}", metadata={"service_id": service_id})
-    return redirect(url_for("routes.index", service=service_id))
+    return redirect(url_for("routes.index", service=service_id, ok="field_saved"))
 
 
 @routes.post("/field/delete/<int:field_id>/<int:account_id>")
@@ -470,7 +484,7 @@ def field_delete(field_id: int, account_id: int) -> Response:
         if not conn.execute("SELECT 1 FROM field_values WHERE field_id=?", (field_id,)).fetchone():
             conn.execute("DELETE FROM custom_fields WHERE id=?", (field_id,))
         _audit(conn, action="field.deleted", target_type="field_value", target_id=f"{field_id}:{account_id}", metadata={"service_id": service_id})
-    return redirect(url_for("routes.index", service=service_id))
+    return redirect(url_for("routes.index", service=service_id, ok="field_deleted"))
 
 
 @routes.post("/api/accounts/<int:account_id>/secrets/password/reveal")

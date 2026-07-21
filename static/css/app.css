@@ -122,6 +122,11 @@ strong { font-weight: 700; }
   border-radius: var(--radius-sm);
   font-size: .9rem;
 }
+.feedback-error {
+  color: var(--red);
+  background: var(--red-bg);
+  border-color: var(--red-border);
+}
 
 /* ---------- Buttons ---------- */
 .button {
@@ -147,6 +152,7 @@ strong { font-weight: 700; }
 .site-header .button-quiet { color: var(--ink); }
 .button-danger { background: var(--danger); border-color: var(--danger); }
 .button-danger:hover { background: var(--danger-hover); border-color: var(--danger-hover); }
+.button:disabled { opacity: .55; cursor: not-allowed; }
 
 /* ---------- Form controls ---------- */
 input, select, textarea {
@@ -370,6 +376,7 @@ table.accounts tbody td {
   pointer-events: none;
 }
 .copy-feedback:empty { display: none; }
+.table-wrap .copy-feedback { bottom: auto; top: calc(100% + .2rem); }
 .email-text {
   display: inline-block;
   max-width: 100%;
@@ -501,10 +508,17 @@ table.accounts tbody td {
 .field-addition > summary {
   cursor: pointer; font-weight: 600; font-size: .85rem; color: var(--accent);
   padding: .3rem 0; list-style: none;
+  display: flex; align-items: center; gap: .45rem;
 }
 .field-addition > summary::-webkit-details-marker { display: none; }
-.field-addition > summary::before { content: "+ "; }
-.field-addition[open] > summary::before { content: "\2212  "; }
+.field-addition > summary::before {
+  content: ""; width: 0; height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--muted);
+  transition: transform .15s ease;
+}
+.field-addition[open] > summary::before { transform: rotate(90deg); }
 .field-addition form { margin-top: .5rem; }
 
 /* ---------- Empty states ---------- */
@@ -530,12 +544,71 @@ table.accounts tbody td {
 .account-edit-dialog h3 { margin-bottom: .9rem; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .5rem; }
 
+/* ---------- Password toggle / filter meta / toast ---------- */
+.password-field { display: flex; align-items: center; gap: .4rem; }
+.password-field input { flex: 1 1 auto; }
+.password-toggle {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  width: 2.1rem; height: 2.1rem;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: none;
+}
+.password-toggle:hover { background: var(--bg-hover); color: var(--ink); border-color: var(--border-strong); }
+.password-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.filter-meta { display: flex; align-items: center; gap: .6rem; min-height: 1.4rem; }
+.header-user { font-size: .85rem; }
+.toast {
+  position: fixed;
+  bottom: 1.25rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  padding: .55rem .9rem;
+  border-radius: var(--radius-sm);
+  font-size: .9rem;
+  color: var(--red);
+  background: var(--bg-elev-2);
+  border: 1px solid var(--red-border);
+  box-shadow: var(--shadow-sm);
+}
+.toast[hidden] { display: none; }
+.secret-mask.is-expiring { color: var(--amber); }
+@media (max-width: 30rem) { .header-user { display: none; } }
+
+/* ---------- Touch targets (44px on coarse pointers) ---------- */
+@media (pointer: coarse) {
+  .copy-button, .expand-btn { width: 2.75rem; height: 2.75rem; }
+  .toggle { padding: .6rem .4rem; }
+  .button-small { padding: .6rem .8rem; }
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 48rem) {
   .page-shell { padding: 1.25rem 1rem 3rem; }
   .site-header { padding: 0 1rem; }
   .detail-body { grid-template-columns: 1fr; }
   .filter-field input { max-width: none; }
+  table.accounts thead { display: none; }
+  table.accounts { min-width: 0; }
+  table.accounts, table.accounts tbody, .account-row, .account-row td { display: block; width: 100%; }
+  .account-row { border-bottom: 1px solid var(--border); padding: .6rem .9rem; }
+  .account-row td { border: 0; padding: .3rem 0; white-space: normal; }
+  .account-row td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font-size: .68rem;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--muted);
+    margin-bottom: .15rem;
+  }
+  .account-row .cell-actions { display: flex; }
+  .detail-row > td { display: block; }
+  .no-results, .no-results td { display: block; }
 }
 @media (max-width: 30rem) {
   .service-add input { width: 8rem; }

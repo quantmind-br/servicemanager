@@ -179,6 +179,23 @@ def _authenticate(username: str, password: str, *, require_active: bool = True) 
         return user, None
 
 
+_FAILURE_MESSAGES = {
+    401: "Credenciais inválidas.",
+    429: "Muitas tentativas. Aguarde alguns minutos.",
+}
+
+
+def _render_auth_failure(template: str, response: Response, **context: Any) -> Response:
+    message = _FAILURE_MESSAGES.get(response.status_code)
+    if message is None:
+        return response
+    return Response(
+        render_template(template, error=message, **context),
+        status=response.status_code,
+        headers={"Cache-Control": "no-store, private"},
+    )
+
+
 @auth.route("/login", methods=["GET", "POST"])
 def login() -> Response:
     if request.method == "GET":
@@ -189,11 +206,11 @@ def login() -> Response:
         conn = get_db()
         with transaction(conn):
             if _rate_limited(conn, username=username, ip=source_ip()):
-                return Response("Muitas tentativas", status=429)
-            return _authentication_failure(conn, username=username, ip=source_ip())
+                return _render_auth_failure("login.html", Response("Muitas tentativas", status=429))
+            return _render_auth_failure("login.html", _authentication_failure(conn, username=username, ip=source_ip()))
     user, error = _authenticate(username, password)
     if error is not None:
-        return error
+        return _render_auth_failure("login.html", error)
     _set_session(user)
     return redirect(url_for("auth.account" if user["must_change_password"] else "routes.index"))
 
@@ -314,10 +331,10 @@ def reauth() -> Response:
     conn = get_db()
     with transaction(conn):
         if _rate_limited(conn, username=username, ip=source_ip()):
-            return Response("Muitas tentativas", status=429)
+            return _render_auth_failure("reauth.html", Response("Muitas tentativas", status=429))
         current = conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
         if not _valid_secret(password) or current is None or not verify_password(current["password_hash"], password):
-            return _authentication_failure(conn, username=username, ip=source_ip())
+            return _render_auth_failure("reauth.html", _authentication_failure(conn, username=username, ip=source_ip()))
         _audit(conn, action="reauth", target_type="user", target_id=current["id"], actor_user_id=current["id"])
     session["reauthenticated_at"] = time.time()
     return Response(status=204)
@@ -337,19 +354,19 @@ def change_username() -> Response:
     username = normalize_username(request.form.get("username"))
     current_password = request.form.get("current_password", "")
     if not username or not _valid_secret(current_password):
-        return Response("Usuário inválido", status=400)
+        return Response(render_template("account.html", user=user, error_username="Login inválido ou senha incorreta."), status=400, headers={"Cache-Control": "no-store, private"})
     conn = get_db()
     try:
         with transaction(conn):
             current = conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
             if current is None or not verify_password(current["password_hash"], current_password):
-                return Response("Usuário inválido", status=400)
+                return Response(render_template("account.html", user=user, error_username="Login inválido ou senha incorreta."), status=400, headers={"Cache-Control": "no-store, private"})
             if username == current["username"].lower():
                 return redirect(url_for("auth.account"), code=303)
             conn.execute("UPDATE users SET username=?, updated_at=?, session_version=session_version+1 WHERE id=?", (username, now_text(), current["id"]))
             _audit(conn, action="user.username_changed", target_type="user", target_id=current["id"], actor_user_id=current["id"])
     except sqlite3.IntegrityError:
-        return Response("Login indisponível", status=409)
+        return Response(render_template("account.html", user=user, error_username="Este login já está em uso."), status=409, headers={"Cache-Control": "no-store, private"})
     refreshed = conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
     _set_session(refreshed, reauthenticated=True)
     return redirect(url_for("auth.account"), code=303)
@@ -362,12 +379,12 @@ def change_password() -> Response:
     current_password = request.form.get("current_password", "")
     new_password = request.form.get("new_password", "")
     if not _valid_secret(current_password) or not _valid_secret(new_password) or len(new_password) < 16:
-        return Response("Senha inválida", status=400)
+        return Response(render_template("account.html", user=user, error_password="Não foi possível alterar a senha. Verifique a senha atual e use ao menos 16 caracteres em uma senha nova diferente."), status=400, headers={"Cache-Control": "no-store, private"})
     conn = get_db()
     with transaction(conn):
         current = conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
         if current is None or current_password == new_password or not verify_password(current["password_hash"], current_password):
-            return Response("Senha inválida", status=400)
+            return Response(render_template("account.html", user=user, error_password="Não foi possível alterar a senha. Verifique a senha atual e use ao menos 16 caracteres em uma senha nova diferente."), status=400, headers={"Cache-Control": "no-store, private"})
         stamp = now_text()
         conn.execute(
             "UPDATE users SET password_hash=?, must_change_password=0, password_changed_at=?, updated_at=?, session_version=session_version+1 WHERE id=?",

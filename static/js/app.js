@@ -57,11 +57,12 @@
     const state = secretState.get(cell);
     if (state) {
       window.clearTimeout(state.timer);
+      window.clearTimeout(state.warnTimer);
       state.controller?.abort();
       secretState.delete(cell);
     }
     const mask = cell.querySelector("[data-secret-mask]");
-    if (mask) mask.textContent = "••••••••";
+    if (mask) { mask.textContent = "••••••••"; mask.classList.remove("is-expiring"); }
     const showButton = cell.querySelector("[data-secret-show]");
     if (showButton) showButton.textContent = "Exibir";
   };
@@ -80,6 +81,7 @@
     const prior = secretState.get(cell);
     if (prior) {
       window.clearTimeout(prior.timer);
+      window.clearTimeout(prior.warnTimer);
       prior.controller?.abort();
     }
     secretState.set(cell, { controller, timer: 0 });
@@ -89,7 +91,7 @@
       headers: { "X-CSRFToken": csrfToken, "Accept": "application/json" },
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error("reveal failed");
+    if (!response.ok) { const err = new Error("reveal failed"); err.status = response.status; throw err; }
     const payload = await response.json();
     return { controller, value: payload.value, expiresIn: payload.expires_in };
   };
@@ -102,6 +104,7 @@
         restoreMask(cell);
         return;
       }
+      button.disabled = true;
       try {
         const { controller, value, expiresIn } = await fetchSecret(cell);
         if (controller.signal.aborted || document.hidden) return;
@@ -109,11 +112,14 @@
         if (mask) mask.textContent = value;
         button.textContent = "Ocultar";
         const timer = window.setTimeout(() => restoreMask(cell), Math.min(expiresIn, 30) * 1000 || 30000);
-        secretState.set(cell, { controller, timer, revealed: true });
+        const warnTimer = window.setTimeout(() => { const m = cell.querySelector("[data-secret-mask]"); if (m) m.classList.add("is-expiring"); }, Math.max((Math.min(expiresIn, 30) - 5) * 1000, 0));
+        secretState.set(cell, { controller, timer, warnTimer, revealed: true });
       } catch (error) {
         if (error?.name === "AbortError") return;
         restoreMask(cell);
-        feedbackFor(cell, "Não foi possível exibir");
+        feedbackFor(cell, error?.status === 429 ? "Limite de revelações atingido" : "Não foi possível exibir");
+      } finally {
+        button.disabled = false;
       }
     });
   });
@@ -126,18 +132,20 @@
         flashCopyFeedback(button, "Não foi possível copiar");
         return;
       }
+      let ownController = null;
       try {
         const result = await fetchSecret(cell);
-        if (result.controller.signal.aborted) return;
+        ownController = result.controller;
+        if (ownController.signal.aborted) return;
         let value = result.value;
         await navigator.clipboard.writeText(value);
         value = "";
-        restoreMask(cell);
+        if (secretState.get(cell)?.controller === ownController) restoreMask(cell);
         flashCopyFeedback(button, "Copiado");
       } catch (error) {
         if (error?.name === "AbortError") return;
-        restoreMask(cell);
-        flashCopyFeedback(button, "Não foi possível copiar");
+        if (!ownController || secretState.get(cell)?.controller === ownController) restoreMask(cell);
+        flashCopyFeedback(button, error?.status === 429 ? "Limite de revelações atingido" : "Não foi possível copiar");
       }
     });
   });
@@ -162,21 +170,77 @@
       button.addEventListener("click", () => {
         editForm.setAttribute("action", button.dataset.updateUrl);
         editForm.email.value = button.dataset.accountEmail || "";
+        editForm.dataset.initialEmail = button.dataset.accountEmail || "";
         editForm.password.value = "";
         syncCsrfFields(editForm);
         editDialog.showModal();
       });
     });
-    editDialog.querySelector("[data-edit-cancel]")?.addEventListener("click", closeEditDialog);
-    editDialog.addEventListener("cancel", (event) => { event.preventDefault(); closeEditDialog(); });
+    const requestCloseEditDialog = () => {
+      const dirty =
+        editForm.email.value !== (editForm.dataset.initialEmail || "") ||
+        editForm.password.value !== "";
+      if (!dirty) { closeEditDialog(); return; }
+      askConfirm("Descartar alterações?").then((ok) => { if (ok) closeEditDialog(); });
+    };
+    editDialog.querySelector("[data-edit-cancel]")?.addEventListener("click", requestCloseEditDialog);
+    editDialog.addEventListener("cancel", (event) => { event.preventDefault(); requestCloseEditDialog(); });
     editDialog.addEventListener("click", (event) => {
-      if (event.target === editDialog) closeEditDialog();
+      if (event.target === editDialog) requestCloseEditDialog();
     });
   }
 
-  document.querySelectorAll("form[data-confirm]").forEach((form) => {
-    form.addEventListener("submit", (event) => {
-      if (!window.confirm(form.dataset.confirm)) event.preventDefault();
+  const confirmDialog = document.getElementById("confirm-dialog");
+  const askConfirm = (message) => {
+    if (!confirmDialog) return Promise.resolve(window.confirm(message));
+    return new Promise((resolve) => {
+      confirmDialog.querySelector("[data-confirm-message]").textContent = message;
+      const settle = (value) => {
+        confirmDialog.removeEventListener("cancel", onCancel);
+        accept.removeEventListener("click", onAccept);
+        cancel.removeEventListener("click", onCancel);
+        if (confirmDialog.open) confirmDialog.close();
+        resolve(value);
+      };
+      const onAccept = () => settle(true);
+      const onCancel = (event) => { event.preventDefault(); settle(false); };
+      const accept = confirmDialog.querySelector("[data-confirm-accept]");
+      const cancel = confirmDialog.querySelector("[data-confirm-cancel]");
+      accept.addEventListener("click", onAccept);
+      cancel.addEventListener("click", onCancel);
+      confirmDialog.addEventListener("cancel", onCancel);
+      confirmDialog.showModal();
+    });
+  };
+
+  document.addEventListener("submit", (event) => {
+    const form = event.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    if (form.dataset.confirm && form.dataset.confirmed !== "1") {
+      event.preventDefault();
+      askConfirm(form.dataset.confirm).then((ok) => {
+        if (!ok) return;
+        form.dataset.confirmed = "1";
+        form.requestSubmit();
+      });
+      return;
+    }
+    delete form.dataset.confirmed;
+    if (form.hasAttribute("data-no-submit-lock")) return;
+    if (form.dataset.submitting) { event.preventDefault(); return; }
+    form.dataset.submitting = "1";
+    const button = form.querySelector('button[type="submit"]');
+    if (button) {
+      button.dataset.label = button.textContent;
+      button.disabled = true;
+      button.textContent = "Enviando…";
+    }
+  });
+  window.addEventListener("pageshow", () => {
+    document.querySelectorAll("form[data-submitting]").forEach((form) => {
+      delete form.dataset.submitting;
+      const button = form.querySelector("button[disabled][data-label]");
+      if (button) { button.disabled = false; button.textContent = button.dataset.label; }
     });
   });
 
@@ -194,6 +258,7 @@
     return i === needle.length;
   };
 
+  let refreshFilter = () => {};
   const filterInput = document.getElementById("account-filter");
   const statusFilter = document.getElementById("filter-status");
   const registeredFilter = document.getElementById("filter-registered");
@@ -202,8 +267,6 @@
     const rowInfo = Array.from(accountsTbody.querySelectorAll("tr[data-row]")).map((tr) => ({
       tr,
       search: normalize(tr.dataset.search || ""),
-      status: tr.dataset.status || "",
-      registered: tr.dataset.registered || "",
       detail: document.getElementById("detail-" + tr.dataset.id),
     }));
     const noResults = accountsTbody.querySelector("tr.no-results");
@@ -213,19 +276,33 @@
       const registered = registeredFilter?.value || "";
       let visible = 0;
       for (const info of rowInfo) {
+        const statusOption = info.tr.querySelector(".status-badge")?.selectedOptions[0]?.textContent || "";
+        const haystack = info.search + " " + normalize(statusOption);
         const show =
-          subsequenceMatch(query, info.search) &&
-          (!status || info.status === status) &&
-          (!registered || info.registered === registered);
+          subsequenceMatch(query, haystack) &&
+          (!status || info.tr.dataset.status === status) &&
+          (!registered || info.tr.dataset.registered === registered);
         info.tr.hidden = !show;
         if (!show && info.detail) info.detail.hidden = true;
         if (show) visible += 1;
       }
       if (noResults) noResults.hidden = visible !== 0;
+      const active = Boolean(query || status || registered);
+      const countEl = document.getElementById("filter-count");
+      if (countEl) countEl.textContent = active ? `Exibindo ${visible} de ${rowInfo.length} contas` : "";
+      const clearButton = document.getElementById("filter-clear");
+      if (clearButton) clearButton.hidden = !active;
     };
+    refreshFilter = applyFilter;
     filterInput?.addEventListener("input", applyFilter);
     statusFilter?.addEventListener("change", applyFilter);
     registeredFilter?.addEventListener("change", applyFilter);
+    document.getElementById("filter-clear")?.addEventListener("click", () => {
+      if (filterInput) filterInput.value = "";
+      if (statusFilter) statusFilter.value = "";
+      if (registeredFilter) registeredFilter.value = "";
+      applyFilter();
+    });
     applyFilter();
   }
 
@@ -243,13 +320,99 @@
   });
 
   // ===== Auto-submit: [data-autosubmit] controls POST their form on change.
+  const toast = document.getElementById("toast");
+  let toastTimer = 0;
+  const showToast = (message) => {
+    if (!toast) return;
+    toast.textContent = message;
+    toast.hidden = false;
+    window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => { toast.hidden = true; }, 5000);
+  };
+
+  const controlValue = (control) =>
+    control.type === "checkbox" ? (control.checked ? "1" : "0") : control.value;
+
+  const bumpCount = (status, delta) => {
+    const el = document.querySelector(`[data-count="${status}"]`);
+    if (el) el.textContent = String(Math.max(0, (parseInt(el.textContent, 10) || 0) + delta));
+  };
+
   document.querySelectorAll("[data-autosubmit]").forEach((control) => {
-    control.addEventListener("change", () => {
+    control.dataset.prev = controlValue(control);
+    control.addEventListener("change", async () => {
       const form = control.closest("form");
       if (!form) return;
-      if (typeof form.requestSubmit === "function") form.requestSubmit();
-      else form.submit();
+      if (!form.hasAttribute("data-fetch-update")) {
+        if (typeof form.requestSubmit === "function") form.requestSubmit();
+        else form.submit();
+        return;
+      }
+      const previous = control.dataset.prev;
+      const value = controlValue(control);
+      const body = new URLSearchParams(new FormData(form));
+      control.disabled = true;
+      try {
+        const response = await fetch(form.action, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "X-CSRFToken": csrfToken },
+          body,
+        });
+        if (response.redirected && new URL(response.url).pathname === "/login") {
+          window.location.assign(response.url);
+          return;
+        }
+        if (!response.ok) throw new Error("update failed");
+        control.dataset.prev = value;
+        const row = form.closest("tr[data-row]");
+        if (control.name === "status" && row) {
+          bumpCount(row.dataset.status, -1);
+          bumpCount(value, 1);
+          row.dataset.status = value;
+          const pill = form.querySelector(".status-pill");
+          if (pill) pill.className = "status-pill status-" + value;
+          const label = control.selectedOptions[0]?.textContent || value;
+          const copyButton = form.querySelector("[data-copy-value]");
+          if (copyButton) copyButton.dataset.copyValue = label;
+          refreshFilter();
+        } else if (control.name === "registered" && row) {
+          row.dataset.registered = value;
+          const copyButton = form.querySelector("[data-copy-value]");
+          if (copyButton) copyButton.dataset.copyValue = value === "1" ? "Cadastrada" : "Não cadastrada";
+          refreshFilter();
+        }
+      } catch {
+        if (control.type === "checkbox") control.checked = previous === "1";
+        else control.value = previous;
+        showToast("Não foi possível salvar. Tente novamente.");
+      } finally {
+        control.disabled = false;
+      }
     });
   });
+
+  // ===== Password visibility toggles.
+  document.querySelectorAll("[data-password-toggle]").forEach((button) => {
+    const input = button.closest(".password-field")?.querySelector("input");
+    if (!input) return;
+    button.addEventListener("click", () => {
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      button.setAttribute("aria-pressed", show ? "true" : "false");
+      button.setAttribute("aria-label", show ? "Ocultar senha" : "Mostrar senha");
+    });
+  });
+
+  // ===== Feedback banner: auto-dismiss ok successes + strip the ok param.
+  const feedbackBanner = document.querySelector("[data-feedback]");
+  if (feedbackBanner) {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("ok")) {
+      url.searchParams.delete("ok");
+      window.history.replaceState(null, "", url);
+      window.setTimeout(() => { feedbackBanner.hidden = true; }, 6000);
+    }
+  }
 
 })();

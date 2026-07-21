@@ -9,7 +9,7 @@
   <p class="eyebrow">Cofre de acesso</p>
   <h1>Contas de serviço</h1>
   {% if current_name %}<p class="muted">Serviço selecionado: <strong class="ink-strong">{{ current_name }}</strong></p>{% else %}<p class="muted">Selecione ou crie um serviço para começar.</p>{% endif %}
-  {% if import_feedback %}<p class="feedback" role="status">{{ import_feedback }}</p>{% endif %}
+  {% if feedback %}<p class="feedback" role="status" data-feedback>{{ feedback }}</p>{% endif %}
 </section>
 
 <section class="service-bar" aria-label="Serviços">
@@ -24,7 +24,7 @@
     <button class="button button-small" type="submit">Adicionar</button>
   </form>
   {% if current and is_admin %}
-  <form method="post" action="{{ url_for('routes.service_delete', service_id=current) }}" data-confirm="Excluir este serviço e seus vínculos?">
+  <form method="post" action="{{ url_for('routes.service_delete', service_id=current) }}" data-confirm="Excluir o serviço «{{ current_name }}» e os vínculos de {{ counts.total }} conta(s)?">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button class="button button-small button-danger" type="submit">Excluir serviço</button>
   </form>
@@ -33,10 +33,10 @@
 
 {% if current %}
 <section class="summary" aria-label="Resumo das contas">
-  <span class="stat"><strong>{{ counts.total }}</strong> contas</span>
-  <span class="stat-dot dot-ativo">{{ counts.ativo }} ativas</span>
-  <span class="stat-dot dot-nunca">{{ counts.nunca }} sem uso</span>
-  <span class="stat-dot dot-inativo">{{ counts.inativo }} inativas</span>
+  <span class="stat"><strong data-count="total">{{ counts.total }}</strong> contas</span>
+  <span class="stat-dot dot-ativo"><span data-count="ativo">{{ counts.ativo }}</span> ativas</span>
+  <span class="stat-dot dot-nunca"><span data-count="nunca">{{ counts.nunca }}</span> sem uso</span>
+  <span class="stat-dot dot-inativo"><span data-count="inativo">{{ counts.inativo }}</span> inativas</span>
 </section>
 
 <div class="table-controls">
@@ -58,6 +58,10 @@
         <option value="0">Não cadastrada</option>
       </select>
     </label>
+  </div>
+  <div class="filter-meta">
+    <span id="filter-count" class="muted" aria-live="polite"></span>
+    <button id="filter-clear" class="button button-quiet button-small" type="button" hidden>Limpar filtros</button>
   </div>
   <div class="panel-row">
     <details class="panel-details">
@@ -92,6 +96,7 @@
   {% if rows %}
   <div class="table-wrap">
     <table class="accounts">
+      <caption class="sr-only">Contas do serviço {{ current_name }}</caption>
       <thead>
         <tr>
           <th scope="col">Email</th>
@@ -103,7 +108,7 @@
       </thead>
       <tbody>
       {% for row in rows %}
-        {% set search = namespace(value=row['email'] ~ ' ' ~ labels.get(row['status'], row['status'])) %}
+        {% set search = namespace(value=row['email']) %}
         {% for f in row['fields'] %}{% set search.value = search.value ~ ' ' ~ f['name'] ~ ' ' ~ (f['value'] or '') %}{% endfor %}
         <tr class="account-row" id="row-{{ row['id'] }}" data-row data-id="{{ row['id'] }}" data-status="{{ row['status'] }}" data-registered="{{ 1 if row['registered'] else 0 }}" data-search="{{ search.value | e }}">
           <td class="cell-email">
@@ -115,15 +120,15 @@
               {{ copy_value("e-mail", row['email']) }}
             </div>
           </td>
-          <td class="cell-secret">
+          <td class="cell-secret" data-label="Senha">
             <div class="secret-line" data-secret-cell data-reveal-url="{{ url_for('routes.reveal_password', account_id=row['id']) }}">
               <span class="secret-mask" data-secret-mask>••••••••</span>
               <button class="button button-small" type="button" data-secret-show>Exibir</button>
               <button class="copy-button" type="button" data-secret-copy aria-label="Copiar senha" title="Copiar senha"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="5" y="5" width="8" height="9" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M11 5V3.4A1.4 1.4 0 0 0 9.6 2H3.4A1.4 1.4 0 0 0 2 3.4v6.2A1.4 1.4 0 0 0 3.4 11H5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg><span class="copy-feedback" aria-live="polite"></span></button>
             </div>
           </td>
-          <td class="cell-status">
-            <form method="post" action="{{ url_for('routes.update_status', item_id=row['id']) }}">
+          <td class="cell-status" data-label="Status">
+            <form method="post" action="{{ url_for('routes.update_status', item_id=row['id']) }}" data-fetch-update>
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="service_id" value="{{ current }}">
               <span class="status-pill status-{{ row['status'] }}">
@@ -131,22 +136,23 @@
                   {% for sval, slabel in labels.items() %}<option value="{{ sval }}"{% if row['status'] == sval %} selected{% endif %}>{{ slabel }}</option>{% endfor %}
                 </select>
               </span>
+              <noscript><button class="button button-small" type="submit">Salvar</button></noscript>
               {{ copy_value("status", labels.get(row['status'], row['status'])) }}
             </form>
           </td>
-          <td class="cell-cadastro">
-            <form method="post" action="{{ url_for('routes.update_registered', item_id=row['id']) }}">
+          <td class="cell-cadastro" data-label="Cadastro">
+            <form method="post" action="{{ url_for('routes.update_registered', item_id=row['id']) }}" data-fetch-update>
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="service_id" value="{{ current }}">
               <label class="toggle">
                 <input type="checkbox" name="registered" value="1" data-autosubmit{% if row['registered'] %} checked{% endif %} aria-label="Cadastrada">
                 <span class="toggle-track"><span class="toggle-thumb"></span></span>
               </label>
-              <input type="hidden" name="registered" value="0">
+              <noscript><button class="button button-small" type="submit">Salvar</button></noscript>
               {{ copy_value("cadastro", "Cadastrada" if row['registered'] else "Não cadastrada") }}
             </form>
           </td>
-          <td class="cell-actions">
+          <td class="cell-actions" data-label="Ações">
             <button class="button button-small" type="button" data-edit-account data-account-id="{{ row['id'] }}" data-account-email="{{ row['email'] }}" data-update-url="{{ url_for('routes.update', item_id=row['id']) }}" title="Editar conta">Editar</button>
             {% if is_admin %}
             <form class="inline-form" method="post" action="{{ url_for('routes.delete', item_id=row['id']) }}" data-confirm="Excluir esta conta?">
@@ -234,6 +240,14 @@
     </div>
   </form>
 </dialog>
+<dialog id="confirm-dialog" class="account-edit-dialog">
+  <p data-confirm-message></p>
+  <div class="dialog-actions">
+    <button class="button button-small button-quiet" type="button" data-confirm-cancel>Cancelar</button>
+    <button class="button button-small button-danger" type="button" data-confirm-accept>Confirmar</button>
+  </div>
+</dialog>
+<div id="toast" class="toast" role="alert" hidden></div>
 {% else %}
 <section class="panel empty-service">
   <p class="empty-state">Selecione um serviço acima, ou crie um novo, para gerenciar suas contas.</p>

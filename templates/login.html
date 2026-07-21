@@ -4,10 +4,16 @@
 <section class="auth-card">
   <p class="eyebrow">Acesso protegido</p>
   <h1>Entrar no Service Manager</h1>
+  {% if error %}<p class="feedback feedback-error" role="alert">{{ error }}</p>{% endif %}
   <form method="post" action="{{ url_for('auth.login') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Login<input name="username" type="text" autocomplete="username" required minlength="3" maxlength="64"></label>
-    <label>Senha<input name="password" type="password" autocomplete="current-password" required maxlength="4096"></label>
+    <label>Login<input name="username" type="text" autocomplete="username" required minlength="3" maxlength="64" autofocus></label>
+    <label>Senha
+      <span class="password-field">
+        <input name="password" type="password" autocomplete="current-password" required maxlength="4096">
+        <button class="password-toggle" type="button" data-password-toggle aria-label="Mostrar senha" aria-pressed="false"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8s-2.4 4.2-6.5 4.2S1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.3"/></svg></button>
+      </span>
+    </label>
     <button class="button" type="submit">Entrar</button>
   </form>
 </section>
