@@ -277,3 +277,89 @@ def test_css_disclosure_uses_chevron_not_plus_minus(client):
     assert ".password-toggle" in css
     assert ".toast" in css
     assert "@media (pointer: coarse)" in css
+
+
+def test_add_duplicate_email_json_for_fetch_and_styled_html_for_forms(app, client):
+    service_id, _ = seed_authenticated_secret(app, client)
+    data = {"service_id": service_id, "email": "dup@example.com", "password": "x", "status": "ativo"}
+
+    assert client.post("/add", data=data).status_code == 302
+    json_error = client.post("/add", data=data, headers={"Accept": "application/json"})
+    html_error = client.post("/add", data=data)
+
+    assert json_error.status_code == html_error.status_code == 400
+    assert json_error.get_json() == {"error": "Email já cadastrado"}
+    html = html_error.get_data(as_text=True)
+    assert "Email já cadastrado" in html
+    assert "error-card" in html
+
+
+def test_field_mutations_redirect_with_row_anchor(app, client):
+    service_id, account_id = seed_authenticated_secret(app, client)
+    created = client.post(
+        "/field/add",
+        data={"service_id": service_id, "account_ids": account_id, "name": "Doc", "value": "v"},
+    )
+
+    assert created.status_code == 302
+    assert created.headers["Location"].endswith(f"#row-{account_id}")
+    with app.app_context():
+        field_id = get_db().execute("SELECT id FROM custom_fields WHERE service_id=? AND name='Doc'", (service_id,)).fetchone()["id"]
+    updated = client.post(f"/field/update/{field_id}/{account_id}", data={"service_id": service_id, "value": "next"})
+
+    assert updated.status_code == 302
+    assert updated.headers["Location"].endswith(f"#row-{account_id}")
+
+
+def test_index_carries_a11y_and_async_hooks(app, client):
+    service_id, _ = seed_authenticated_secret(app, client)
+    body = client.get(f"/?service={service_id}").get_data(as_text=True)
+    base = client.get("/").get_data(as_text=True)
+
+    assert body.count("data-async-form") == 2
+    for hook in (
+        "data-form-error",
+        'aria-current="page"',
+        'aria-labelledby="edit-dialog-title"',
+        'aria-labelledby="confirm-dialog-message"',
+        'id="save-announcer"',
+        'class="th-sort"',
+        'aria-sort="none"',
+        "data-password-toggle",
+    ):
+        assert hook in body
+    assert 'class="skip-link"' in base
+    assert 'id="main"' in base
+
+
+def test_app_js_new_behaviors(client):
+    script = client.get("/static/js/app.js").get_data(as_text=True)
+
+    for literal in (
+        "response.redirected",
+        '"…"',
+        "toast toast-error",
+        "is-copied",
+        "#row-",
+        "Status salvo.",
+        "Cadastro salvo.",
+        "data-async-form",
+        "th-sort",
+        '"added"',
+        'searchParams.has("ok")',
+    ):
+        assert literal in script
+
+
+def test_css_new_rules(client):
+    css = client.get("/static/css/app.css").get_data(as_text=True)
+
+    for rule in (
+        ".skip-link",
+        ".toast-error",
+        ".copy-button.is-copied",
+        "@media (min-width: 34rem)",
+        'th[aria-sort="ascending"]',
+    ):
+        assert rule in css
+    assert "bottom: calc(100% + .2rem)" not in css

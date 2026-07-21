@@ -17,25 +17,46 @@
     if (event.target instanceof HTMLFormElement) syncCsrfFields(event.target);
   }, true);
 
+  const toast = document.getElementById("toast");
+  let toastTimer = 0;
+  const showToast = (message, kind = "error") => {
+    if (!toast) return;
+    toast.textContent = message;
+    toast.className = kind === "error" ? "toast toast-error" : "toast";
+    toast.hidden = false;
+    window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => { toast.hidden = true; }, 5000);
+  };
+
+  const saveAnnouncer = document.getElementById("save-announcer");
+  const announceSave = (message) => {
+    if (!saveAnnouncer) return;
+    saveAnnouncer.textContent = "";
+    window.setTimeout(() => { saveAnnouncer.textContent = message; }, 30);
+  };
+
   // ===== Copy: [data-copy-value] copies a fixed string; [data-copy-input] copies
   // the current value of a referenced input. No insecure/deprecated fallback.
   const flashCopyFeedback = (button, message) => {
     const feedback = button.querySelector(".copy-feedback");
-    if (!feedback) return;
-    feedback.textContent = message;
-    window.setTimeout(() => { feedback.textContent = ""; }, 1500);
+    if (feedback) feedback.textContent = message;
+    button.classList.add("is-copied");
+    window.setTimeout(() => {
+      if (feedback) feedback.textContent = "";
+      button.classList.remove("is-copied");
+    }, 1500);
   };
 
   const copyText = async (button, text) => {
     if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
-      flashCopyFeedback(button, "Não foi possível copiar");
+      showToast("Não foi possível copiar.");
       return;
     }
     try {
       await navigator.clipboard.writeText(text);
       flashCopyFeedback(button, "Copiado");
-    } catch (error) {
-      flashCopyFeedback(button, "Não foi possível copiar");
+    } catch {
+      showToast("Não foi possível copiar.");
     }
   };
 
@@ -71,10 +92,6 @@
     for (const cell of Array.from(secretState.keys())) restoreMask(cell);
   };
 
-  const feedbackFor = (cell, message) => {
-    const copyButton = cell.querySelector("[data-secret-copy]");
-    if (copyButton) flashCopyFeedback(copyButton, message);
-  };
 
   const fetchSecret = async (cell) => {
     const controller = new AbortController();
@@ -91,6 +108,10 @@
       headers: { "X-CSRFToken": csrfToken, "Accept": "application/json" },
       signal: controller.signal,
     });
+    if (response.redirected && new URL(response.url).pathname === "/login") {
+      window.location.assign(response.url);
+      return new Promise(() => {});
+    }
     if (!response.ok) { const err = new Error("reveal failed"); err.status = response.status; throw err; }
     const payload = await response.json();
     return { controller, value: payload.value, expiresIn: payload.expires_in };
@@ -105,6 +126,7 @@
         return;
       }
       button.disabled = true;
+      button.textContent = "…";
       try {
         const { controller, value, expiresIn } = await fetchSecret(cell);
         if (controller.signal.aborted || document.hidden) return;
@@ -117,8 +139,9 @@
       } catch (error) {
         if (error?.name === "AbortError") return;
         restoreMask(cell);
-        feedbackFor(cell, error?.status === 429 ? "Limite de revelações atingido" : "Não foi possível exibir");
+        showToast(error?.status === 429 ? "Limite de revelações atingido. Aguarde alguns minutos." : "Não foi possível exibir a senha.");
       } finally {
+        if (button.textContent === "…") button.textContent = "Exibir";
         button.disabled = false;
       }
     });
@@ -128,10 +151,6 @@
     const cell = button.closest("[data-secret-cell]");
     if (!cell) return;
     button.addEventListener("click", async () => {
-      if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
-        flashCopyFeedback(button, "Não foi possível copiar");
-        return;
-      }
       let ownController = null;
       try {
         const result = await fetchSecret(cell);
@@ -145,7 +164,7 @@
       } catch (error) {
         if (error?.name === "AbortError") return;
         if (!ownController || secretState.get(cell)?.controller === ownController) restoreMask(cell);
-        flashCopyFeedback(button, error?.status === 429 ? "Limite de revelações atingido" : "Não foi possível copiar");
+        showToast(error?.status === 429 ? "Limite de revelações atingido. Aguarde alguns minutos." : "Não foi possível copiar.")
       }
     });
   });
@@ -244,6 +263,37 @@
     });
   });
 
+  document.querySelectorAll("form[data-async-form]").forEach((form) => {
+    const errorBox = form.querySelector("[data-form-error]");
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (form.dataset.submitting) return;
+      form.dataset.submitting = "1";
+      const button = form.querySelector('button[type="submit"]');
+      const label = button ? button.textContent : "";
+      if (button) { button.disabled = true; button.textContent = "Enviando…"; }
+      if (errorBox) { errorBox.hidden = true; errorBox.textContent = ""; }
+      try {
+        const response = await fetch(form.action, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "X-CSRFToken": csrfToken, "Accept": "application/json" },
+          body: new URLSearchParams(new FormData(form)),
+        });
+        if (response.redirected) { window.location.assign(response.url); return; }
+        const payload = response.status === 400 ? await response.json().catch(() => null) : null;
+        if (payload && payload.error && errorBox) { errorBox.textContent = payload.error; errorBox.hidden = false; }
+        else showToast("Não foi possível salvar. Tente novamente.");
+      } catch {
+        showToast("Não foi possível salvar. Tente novamente.");
+      } finally {
+        delete form.dataset.submitting;
+        if (button) { button.disabled = false; button.textContent = label; }
+      }
+    });
+  });
+
   // ===== Filters: fuzzy text (accent/case-insensitive subsequence over each
   // row's data-search) AND'd with the Status and Cadastro column selects.
   const normalize = (text) =>
@@ -306,6 +356,35 @@
     applyFilter();
   }
 
+  const statusRank = { ativo: 0, nunca: 1, inativo: 2 };
+  document.querySelectorAll(".th-sort").forEach((button) => {
+    button.addEventListener("click", () => {
+      const th = button.closest("th");
+      const table = button.closest("table");
+      const tbody = table ? table.querySelector("tbody") : null;
+      if (!th || !tbody) return;
+      const direction = th.getAttribute("aria-sort") === "ascending" ? "descending" : "ascending";
+      table.querySelectorAll("th[data-sort-col]").forEach((other) => {
+        other.setAttribute("aria-sort", other === th ? direction : "none");
+      });
+      const key = button.dataset.sort;
+      const value = (tr) => key === "status"
+        ? (statusRank[tr.dataset.status] ?? 1)
+        : (tr.querySelector(".email-text")?.textContent || "").toLowerCase();
+      const rows = Array.from(tbody.querySelectorAll("tr[data-row]"));
+      rows.sort((a, b) => {
+        const va = value(a); const vb = value(b);
+        return (va < vb ? -1 : va > vb ? 1 : 0) * (direction === "ascending" ? 1 : -1);
+      });
+      const anchor = tbody.querySelector("tr.no-results");
+      for (const tr of rows) {
+        tbody.insertBefore(tr, anchor);
+        const detail = document.getElementById("detail-" + tr.dataset.id);
+        if (detail) tbody.insertBefore(detail, anchor);
+      }
+    });
+  });
+
   // ===== Row expansion: [data-expand] toggles the paired detail row.
   document.querySelectorAll("[data-expand]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -319,16 +398,16 @@
     });
   });
 
+  const rowHash = /^#row-(\d+)$/.exec(window.location.hash);
+  if (rowHash) {
+    const row = document.getElementById("row-" + rowHash[1]);
+    const detail = document.getElementById("detail-" + rowHash[1]);
+    const expandButton = row ? row.querySelector("[data-expand]") : null;
+    if (expandButton && detail && detail.hidden) expandButton.click();
+    if (row) row.scrollIntoView({ block: "center" });
+  }
+
   // ===== Auto-submit: [data-autosubmit] controls POST their form on change.
-  const toast = document.getElementById("toast");
-  let toastTimer = 0;
-  const showToast = (message) => {
-    if (!toast) return;
-    toast.textContent = message;
-    toast.hidden = false;
-    window.clearTimeout(toastTimer);
-    toastTimer = window.setTimeout(() => { toast.hidden = true; }, 5000);
-  };
 
   const controlValue = (control) =>
     control.type === "checkbox" ? (control.checked ? "1" : "0") : control.value;
@@ -376,11 +455,13 @@
           const copyButton = form.querySelector("[data-copy-value]");
           if (copyButton) copyButton.dataset.copyValue = label;
           refreshFilter();
+          announceSave("Status salvo.");
         } else if (control.name === "registered" && row) {
           row.dataset.registered = value;
           const copyButton = form.querySelector("[data-copy-value]");
           if (copyButton) copyButton.dataset.copyValue = value === "1" ? "Cadastrada" : "Não cadastrada";
           refreshFilter();
+          announceSave("Cadastro salvo.");
         }
       } catch {
         if (control.type === "checkbox") control.checked = previous === "1";
@@ -404,14 +485,15 @@
     });
   });
 
-  // ===== Feedback banner: auto-dismiss ok successes + strip the ok param.
   const feedbackBanner = document.querySelector("[data-feedback]");
   if (feedbackBanner) {
     const url = new URL(window.location.href);
-    if (url.searchParams.has("ok")) {
-      url.searchParams.delete("ok");
+    const isError = url.searchParams.has("error");
+    const hadFeedbackParam = url.searchParams.has("ok") || isError || url.searchParams.has("added") || url.searchParams.has("skipped");
+    if (hadFeedbackParam) {
+      for (const param of ["ok", "added", "skipped", "error"]) url.searchParams.delete(param);
       window.history.replaceState(null, "", url);
-      window.setTimeout(() => { feedbackBanner.hidden = true; }, 6000);
+      if (!isError) window.setTimeout(() => { feedbackBanner.hidden = true; }, 6000);
     }
   }
 

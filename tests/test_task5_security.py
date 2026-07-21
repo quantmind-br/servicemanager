@@ -436,3 +436,24 @@ def test_password_reveal_works_without_recent_reauth(app, client):
     assert payload["value"] == "account-password"
     assert payload["expires_in"] == 30
     assert reveal.headers["Cache-Control"] == "no-store, private"
+
+
+def test_unauthenticated_reveal_redirects_before_csrf_but_authenticated_bad_csrf_is_rejected(app, client):
+    user_id, service_id = authenticated_operator(app, client)
+    with app.app_context():
+        account_id = get_db().execute("INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)", ("csrf-reveal@example.test", b"", b"0" * 12)).lastrowid
+        get_db().execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (account_id, service_id))
+        get_db().commit()
+    with client.session_transaction() as session:
+        session.clear()
+    expired = client.post(f"/api/accounts/{account_id}/secrets/password/reveal")
+
+    assert expired.status_code == 302
+    assert expired.headers["Location"] == "/login"
+
+    with client.session_transaction() as session:
+        now = time.time()
+        session.update(user_id=user_id, role="operador", session_version=0, authenticated_at=now, last_seen_at=now, reauthenticated_at=now)
+    invalid_csrf = client.post(f"/api/accounts/{account_id}/secrets/password/reveal", headers={"Origin": PUBLIC_ORIGIN})
+
+    assert invalid_csrf.status_code == 403

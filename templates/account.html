@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import password_field %}
 {% block title %}Minha conta · Service Manager{% endblock %}
 {% block content %}
 <section class="auth-card">
@@ -12,12 +13,7 @@
   <form method="post" action="{{ url_for('auth.change_username') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <h2>Alterar login</h2>
-    <label>Senha atual
-      <span class="password-field">
-        <input name="current_password" type="password" autocomplete="current-password" required maxlength="4096">
-        <button class="password-toggle" type="button" data-password-toggle aria-label="Mostrar senha" aria-pressed="false"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8s-2.4 4.2-6.5 4.2S1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.3"/></svg></button>
-      </span>
-    </label>
+    <label>Senha atual{{ password_field("current_password", "current-password") }}</label>
     <label>Novo login<input name="username" type="text" autocomplete="username" required minlength="3" maxlength="64"></label>
     <button class="button" type="submit">Salvar login</button>
   </form>
@@ -26,18 +22,8 @@
   <form method="post" action="{{ url_for('auth.change_password') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <h2>Alterar senha</h2>
-    <label>Senha atual
-      <span class="password-field">
-        <input name="current_password" type="password" autocomplete="current-password" required maxlength="4096">
-        <button class="password-toggle" type="button" data-password-toggle aria-label="Mostrar senha" aria-pressed="false"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8s-2.4 4.2-6.5 4.2S1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.3"/></svg></button>
-      </span>
-    </label>
-    <label>Nova senha
-      <span class="password-field">
-        <input name="new_password" minlength="16" type="password" autocomplete="new-password" required maxlength="4096">
-        <button class="password-toggle" type="button" data-password-toggle aria-label="Mostrar senha" aria-pressed="false"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M1.5 8s2.4-4.2 6.5-4.2S14.5 8 14.5 8s-2.4 4.2-6.5 4.2S1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.3"/></svg></button>
-      </span>
-    </label>
+    <label>Senha atual{{ password_field("current_password", "current-password") }}</label>
+    <label>Nova senha{{ password_field("new_password", "new-password", minlength=16) }}</label>
     <button class="button" type="submit">Salvar senha</button>
   </form>
 </section>

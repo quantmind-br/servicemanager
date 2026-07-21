@@ -10,6 +10,7 @@
   <script src="{{ url_for('static', filename='js/app.js', v=asset_ver('js/app.js')) }}" defer></script>
 </head>
 <body>
+  <a class="skip-link" href="#main">Ir para o conteúdo</a>
   <header class="site-header">
     <a class="brand" href="{{ url_for('routes.index') }}">Service Manager</a>
     {% if g.current_user %}
@@ -23,7 +24,7 @@
     </div>
     {% endif %}
   </header>
-  <main class="page-shell">
+  <main id="main" class="page-shell">
     {% block content %}{% endblock %}
   </main>
 </body>

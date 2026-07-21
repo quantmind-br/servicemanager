@@ -77,10 +77,10 @@ def create_app(config: Mapping[str, Any] | None = None) -> Flask:
     app.config["IS_PRODUCTION"] = environment == "production"
 
     init_db_app(app)
-    init_csrf_app(app)
     app.register_blueprint(routes)
     app.register_blueprint(auth)
     bind_auth(app)
+    init_csrf_app(app)
     with app.app_context():
         app.config["AUDIT_CHAIN_HEALTHY"] = verify_audit_chain()
         if not app.config["AUDIT_CHAIN_HEALTHY"]:

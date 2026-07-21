@@ -79,6 +79,14 @@ def _require_audit_chain() -> None:
         abort(503)
 
 
+def _form_error(message: str, *, status: int = 400) -> Response:
+    if request.headers.get("Accept", "").startswith("application/json"):
+        response = jsonify(error=message)
+        response.status_code = status
+        return response
+    return Response(render_template("form_error.html", message=message), status=status, mimetype="text/html")
+
+
 def selected_service_id() -> int | None:
     conn = get_db()
     services = conn.execute("SELECT id FROM services ORDER BY name").fetchall()
@@ -208,7 +216,8 @@ def index() -> str:
         "limits": "limites excedidos",
         "validation": "dados inválidos",
     }
-    if error_kind in error_messages:
+    feedback_is_error = error_kind in error_messages
+    if feedback_is_error:
         feedback = f"Importação rejeitada: {error_messages[error_kind]}. 0 adicionadas; 0 ignoradas."
     elif request.args.get("added") is not None or request.args.get("skipped") is not None:
         try:
@@ -219,7 +228,7 @@ def index() -> str:
         feedback = f"Importação concluída: {added} adicionadas; {skipped} ignoradas."
     elif (ok := request.args.get("ok")) in OK_MESSAGES:
         feedback = OK_MESSAGES[ok]
-    return render_template("index.html", rows=rows, labels=STATUS_LABELS, counts=counts, services=services, current=service_id, current_name=current_name, service_fields=fields, feedback=feedback)
+    return render_template("index.html", rows=rows, labels=STATUS_LABELS, counts=counts, services=services, current=service_id, current_name=current_name, service_fields=fields, feedback=feedback, feedback_is_error=feedback_is_error)
 
 
 @routes.post("/add")
@@ -232,7 +241,7 @@ def add() -> Response:
     status = normalize_status(request.form.get("status"))
     registered = 1 if request.form.get("registered") == "1" else 0
     if email is None or password is None or status is None:
-        return Response("Conta inválida", status=400)
+        return _form_error("Conta inválida")
     try:
         with transaction(conn):
             account_id = conn.execute(
@@ -247,7 +256,7 @@ def add() -> Response:
             _audit(conn, action="account.created", target_type="account", target_id=account_id, metadata={"service_id": service_id})
     except Exception as error:
         if "UNIQUE" in str(error).upper():
-            return Response("Email já cadastrado", status=400)
+            return _form_error("Email já cadastrado")
         raise
     return redirect(url_for("routes.index", service=service_id, ok="account_added"))
 
@@ -332,7 +341,7 @@ def update(item_id: int) -> Response:
     email = _valid_email(request.form.get("email"))
     password = _valid_secret(request.form.get("password", ""))
     if email is None or password is None:
-        return Response("Conta inválida", status=400)
+        return _form_error("Conta inválida")
     try:
         with transaction(conn):
             if password:
@@ -345,7 +354,7 @@ def update(item_id: int) -> Response:
             _audit(conn, action="account.updated", target_type="account", target_id=item_id, metadata={"service_id": service_id})
     except Exception as error:
         if "UNIQUE" in str(error).upper():
-            return Response("Email já cadastrado", status=400)
+            return _form_error("Email já cadastrado")
         raise
     return redirect(url_for("routes.index", service=service_id, ok="account_updated"))
 
@@ -357,7 +366,7 @@ def update_status(item_id: int) -> Response:
     _related_account(conn, service_id, item_id)
     status = normalize_status(request.form.get("status"))
     if status is None:
-        return Response("Status inválido", status=400)
+        return _form_error("Status inválido")
     with transaction(conn):
         conn.execute("UPDATE account_service SET status=? WHERE account_id=? AND service_id=?", (status, item_id, service_id))
         _audit(conn, action="account.status_updated", target_type="account", target_id=item_id, metadata={"service_id": service_id})
@@ -371,7 +380,7 @@ def update_registered(item_id: int) -> Response:
     _related_account(conn, service_id, item_id)
     raw = request.form.get("registered", "0")
     if raw not in {"0", "1"}:
-        return Response("Cadastro inválido", status=400)
+        return _form_error("Cadastro inválido")
     registered = int(raw)
     with transaction(conn):
         conn.execute("UPDATE account_service SET registered=? WHERE account_id=? AND service_id=?", (registered, item_id, service_id))
@@ -394,7 +403,7 @@ def delete(item_id: int) -> Response:
 def service_add() -> Response:
     name = _valid_name(request.form.get("name"))
     if name is None:
-        return Response("Serviço inválido", status=400)
+        return _form_error("Serviço inválido")
     conn = get_db()
     with transaction(conn):
         existing = conn.execute("SELECT id FROM services WHERE name=?", (name,)).fetchone()
@@ -432,9 +441,9 @@ def field_add() -> Response:
     try:
         account_ids = [int(raw) for raw in raw_ids]
     except (TypeError, ValueError):
-        return Response("Campo inválido", status=400)
+        return _form_error("Campo inválido")
     if name is None or value is None or not account_ids or any(account_id <= 0 for account_id in account_ids):
-        return Response("Campo inválido", status=400)
+        return _form_error("Campo inválido")
     with transaction(conn):
         for account_id in account_ids:
             _related_account(conn, service_id, account_id)
@@ -449,7 +458,7 @@ def field_add() -> Response:
                 (field_id, account_id, *encrypted),
             )
         _audit(conn, action="field.created", target_type="field", target_id=field_id, metadata={"service_id": service_id, "accounts": len(account_ids)})
-    return redirect(url_for("routes.index", service=service_id, ok="field_added"))
+    return redirect(url_for("routes.index", service=service_id, ok="field_added", _anchor=f"row-{account_ids[0]}"))
 
 
 @routes.post("/field/update/<int:field_id>/<int:account_id>")
@@ -459,7 +468,7 @@ def field_update(field_id: int, account_id: int) -> Response:
     _related_field_account(conn, service_id, field_id, account_id)
     value = _valid_secret(request.form.get("value", ""))
     if value is None:
-        return Response("Campo inválido", status=400)
+        return _form_error("Campo inválido")
     with transaction(conn):
         field = conn.execute("SELECT id FROM custom_fields WHERE id=? AND service_id=?", (field_id, service_id)).fetchone()
         if field is None:
@@ -470,7 +479,7 @@ def field_update(field_id: int, account_id: int) -> Response:
             (field_id, account_id, *encrypted),
         )
         _audit(conn, action="field.updated", target_type="field_value", target_id=f"{field_id}:{account_id}", metadata={"service_id": service_id})
-    return redirect(url_for("routes.index", service=service_id, ok="field_saved"))
+    return redirect(url_for("routes.index", service=service_id, ok="field_saved", _anchor=f"row-{account_id}"))
 
 
 @routes.post("/field/delete/<int:field_id>/<int:account_id>")
@@ -484,7 +493,7 @@ def field_delete(field_id: int, account_id: int) -> Response:
         if not conn.execute("SELECT 1 FROM field_values WHERE field_id=?", (field_id,)).fetchone():
             conn.execute("DELETE FROM custom_fields WHERE id=?", (field_id,))
         _audit(conn, action="field.deleted", target_type="field_value", target_id=f"{field_id}:{account_id}", metadata={"service_id": service_id})
-    return redirect(url_for("routes.index", service=service_id, ok="field_deleted"))
+    return redirect(url_for("routes.index", service=service_id, ok="field_deleted", _anchor=f"row-{account_id}"))
 
 
 @routes.post("/api/accounts/<int:account_id>/secrets/password/reveal")

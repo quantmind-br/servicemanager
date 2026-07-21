@@ -98,6 +98,9 @@ strong { font-weight: 700; }
 .header-actions { align-items: center; display: flex; gap: .5rem; }
 .logout-form { margin: 0; }
 
+.skip-link { position: absolute; left: -9999px; top: 0; z-index: 30; background: var(--bg-elev-2); color: var(--ink); padding: .5rem .9rem; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); }
+.skip-link:focus { left: 1rem; top: 1rem; }
+
 /* ---------- Layout shells ---------- */
 .page-shell { margin: 0 auto; max-width: 76rem; padding: 2rem 5vw 4rem; }
 .page-heading { margin-bottom: 1.4rem; }
@@ -333,6 +336,10 @@ table.accounts thead th {
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
+.th-sort { background: none; border: 0; padding: 0; font: inherit; font-size: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; cursor: pointer; }
+.th-sort:hover { color: var(--ink); }
+th[aria-sort="ascending"] .th-sort::after { content: " ↑"; }
+th[aria-sort="descending"] .th-sort::after { content: " ↓"; }
 table.accounts tbody td {
   padding: .65rem .85rem;
   border-bottom: 1px solid var(--border);
@@ -367,16 +374,14 @@ table.accounts tbody td {
 .copy-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .copy-feedback {
   position: absolute;
-  bottom: calc(100% + .2rem);
-  left: 50%;
-  transform: translateX(-50%);
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
   white-space: nowrap;
-  font-size: .68rem;
-  color: var(--accent);
-  pointer-events: none;
+  border: 0;
 }
-.copy-feedback:empty { display: none; }
-.table-wrap .copy-feedback { bottom: auto; top: calc(100% + .2rem); }
+.copy-button.is-copied { color: var(--green); border-color: var(--green-border); }
 .email-text {
   display: inline-block;
   max-width: 100%;
@@ -487,6 +492,7 @@ table.accounts tbody td {
 .detail-grid { display: grid; grid-template-columns: 1fr; gap: .6rem; margin-bottom: .75rem; }
 .compact-form { display: grid; gap: .45rem; }
 .compact-form label { margin: 0; }
+.form-error { grid-column: 1 / -1; margin: 0; }
 .compact-form .checkbox-label { margin: 0; }
 
 /* Custom fields table */
@@ -544,6 +550,10 @@ table.accounts tbody td {
 .account-edit-dialog h3 { margin-bottom: .9rem; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .5rem; }
 
+@media (min-width: 34rem) {
+  .account-edit-dialog .detail-grid { grid-template-columns: 1fr 1fr; }
+}
+
 /* ---------- Password toggle / filter meta / toast ---------- */
 .password-field { display: flex; align-items: center; gap: .4rem; }
 .password-field input { flex: 1 1 auto; }
@@ -570,12 +580,13 @@ table.accounts tbody td {
   padding: .55rem .9rem;
   border-radius: var(--radius-sm);
   font-size: .9rem;
-  color: var(--red);
+  color: var(--ink);
   background: var(--bg-elev-2);
-  border: 1px solid var(--red-border);
+  border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-sm);
 }
 .toast[hidden] { display: none; }
+.toast-error { color: var(--red); border-color: var(--red-border); }
 .secret-mask.is-expiring { color: var(--amber); }
 @media (max-width: 30rem) { .header-user { display: none; } }
 

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Solicitação inválida · Service Manager{% endblock %}
+{% block content %}
+<section class="error-card">
+  <p class="eyebrow">Erro 400</p>
+  <h1>Solicitação inválida</h1>
+  <p>{{ message }}</p>
+  <p><a class="button button-quiet" href="{{ url_for('routes.index') }}">Voltar às contas</a></p>
+</section>
+{% endblock %}

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import password_field %}
 {% block title %}Contas de serviço · Service Manager{% endblock %}
 {% block content %}
 {% macro copy_value(label, value) %}<button class="copy-button" type="button" data-copy-value="{{ value }}" aria-label="Copiar {{ label }}" title="Copiar {{ label }}"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="5" y="5" width="8" height="9" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M11 5V3.4A1.4 1.4 0 0 0 9.6 2H3.4A1.4 1.4 0 0 0 2 3.4v6.2A1.4 1.4 0 0 0 3.4 11H5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg><span class="copy-feedback" aria-live="polite"></span></button>{% endmacro %}
@@ -9,13 +10,13 @@
   <p class="eyebrow">Cofre de acesso</p>
   <h1>Contas de serviço</h1>
   {% if current_name %}<p class="muted">Serviço selecionado: <strong class="ink-strong">{{ current_name }}</strong></p>{% else %}<p class="muted">Selecione ou crie um serviço para começar.</p>{% endif %}
-  {% if feedback %}<p class="feedback" role="status" data-feedback>{{ feedback }}</p>{% endif %}
+  {% if feedback %}<p class="feedback{% if feedback_is_error %} feedback-error{% endif %}" role="{{ 'alert' if feedback_is_error else 'status' }}" data-feedback>{{ feedback }}</p>{% endif %}
 </section>
 
 <section class="service-bar" aria-label="Serviços">
   <nav class="service-chips" aria-label="Selecionar serviço">
     {% for service in services %}
-    <a class="chip{% if service['id'] == current %} is-current{% endif %}" href="{{ url_for('routes.index', service=service['id']) }}">{{ service['name'] }}</a>
+    <a class="chip{% if service['id'] == current %} is-current{% endif %}" href="{{ url_for('routes.index', service=service['id']) }}"{% if service['id'] == current %} aria-current="page"{% endif %}>{{ service['name'] }}</a>
     {% endfor %}
   </nav>
   <form class="service-add" method="post" action="{{ url_for('routes.service_add') }}">
@@ -66,13 +67,14 @@
   <div class="panel-row">
     <details class="panel-details">
       <summary>Adicionar conta</summary>
-      <form class="inline-form-grid" method="post" action="{{ url_for('routes.add') }}">
+      <form class="inline-form-grid" method="post" action="{{ url_for('routes.add') }}" data-async-form>
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="service_id" value="{{ current }}">
         <label>Email<input name="email" type="email" autocomplete="off" required maxlength="254"></label>
-        <label>Senha<input name="password" type="password" autocomplete="new-password" required maxlength="4096"></label>
+        <label>Senha{{ password_field("password", "new-password") }}</label>
         <label>Status<select name="status">{% for sval, slabel in labels.items() %}<option value="{{ sval }}">{{ slabel }}</option>{% endfor %}</select></label>
         <label class="checkbox-label"><input type="checkbox" name="registered" value="1"> Cadastrada</label>
+        <p class="feedback feedback-error form-error" role="alert" data-form-error hidden></p>
         <button class="button" type="submit">Adicionar</button>
       </form>
     </details>
@@ -99,9 +101,9 @@
       <caption class="sr-only">Contas do serviço {{ current_name }}</caption>
       <thead>
         <tr>
-          <th scope="col">Email</th>
+          <th scope="col" data-sort-col aria-sort="none"><button type="button" class="th-sort" data-sort="email">Email</button></th>
           <th scope="col">Senha</th>
-          <th scope="col">Status</th>
+          <th scope="col" data-sort-col aria-sort="none"><button type="button" class="th-sort" data-sort="status">Status</button></th>
           <th scope="col">Cadastro</th>
           <th scope="col">Ações</th>
         </tr>
@@ -225,29 +227,31 @@
   {% else %}<div class="empty-wrap"><p class="empty-state">Nenhuma conta cadastrada neste serviço ainda. Use “Adicionar conta” acima para começar.</p></div>{% endif %}
 </section>
 
-<dialog id="account-edit-dialog" class="account-edit-dialog">
-  <form class="edit-form" method="post" data-edit-form>
+<dialog id="account-edit-dialog" class="account-edit-dialog" aria-labelledby="edit-dialog-title">
+  <form class="edit-form" method="post" data-edit-form data-async-form>
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="service_id" value="{{ current }}">
-    <h3>Editar conta</h3>
+    <h3 id="edit-dialog-title">Editar conta</h3>
     <div class="detail-grid">
       <label>Email<input name="email" type="email" value="" autocomplete="off" required maxlength="254"></label>
-      <label>Nova senha <span class="muted-hint">(vazio preserva)</span><input name="password" type="password" value="" autocomplete="new-password" maxlength="4096"></label>
+      <label>Nova senha <span class="muted-hint">(vazio preserva)</span>{{ password_field("password", "new-password", required=False) }}</label>
     </div>
+    <p class="feedback feedback-error form-error" role="alert" data-form-error hidden></p>
     <div class="dialog-actions">
       <button class="button button-small button-quiet" type="button" data-edit-cancel>Cancelar</button>
       <button class="button button-small" type="submit">Salvar</button>
     </div>
   </form>
 </dialog>
-<dialog id="confirm-dialog" class="account-edit-dialog">
-  <p data-confirm-message></p>
+<dialog id="confirm-dialog" class="account-edit-dialog" aria-labelledby="confirm-dialog-message">
+  <p id="confirm-dialog-message" data-confirm-message></p>
   <div class="dialog-actions">
     <button class="button button-small button-quiet" type="button" data-confirm-cancel>Cancelar</button>
     <button class="button button-small button-danger" type="button" data-confirm-accept>Confirmar</button>
   </div>
 </dialog>
 <div id="toast" class="toast" role="alert" hidden></div>
+<span id="save-announcer" class="sr-only" aria-live="polite"></span>
 {% else %}
 <section class="panel empty-service">
   <p class="empty-state">Selecione um serviço acima, ou crie um novo, para gerenciar suas contas.</p>
