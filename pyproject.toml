@@ -17,4 +17,13 @@ dependencies = [
 dev = [
     "pytest==9.1.1",
     "pip-audit==2.10.1",
+    "pyright==1.1.411",
 ]
+
+[tool.pyright]
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
+include = ["app.py", "service_manager", "docker", "scripts", "tests"]
+extraPaths = ["scripts"]
+typeCheckingMode = "standard"

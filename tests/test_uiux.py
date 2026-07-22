@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import create_app
 from service_manager.crypto import account_password_aad, encrypt_secret, hash_password
-from service_manager.db import get_db
+from service_manager.db import get_db, inserted_id
 
 
 KEY = base64.b64encode(b"u" * 32).decode("ascii")
@@ -45,16 +45,16 @@ def seed_authenticated_secret(app, client) -> tuple[int, int]:
     with app.app_context():
         conn = get_db()
         stamp = datetime.now(UTC).isoformat()
-        user_id = conn.execute(
+        user_id = inserted_id(conn.execute(
             "INSERT INTO users (username, password_hash, role, is_active, must_change_password, created_at, updated_at) "
             "VALUES (?, ?, 'operador', 1, 0, ?, ?)",
             ("ui-user", hash_password("user-password"), stamp, stamp),
-        ).lastrowid
-        service_id = conn.execute("INSERT INTO services (name) VALUES ('Email')").lastrowid
-        account_id = conn.execute(
+        ))
+        service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Email')"))
+        account_id = inserted_id(conn.execute(
             "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
             ("person@example.test", b"", b"0" * 12),
-        ).lastrowid
+        ))
         password = encrypt_secret("known-secret", aad=account_password_aad(account_id))
         conn.execute(
             "UPDATE accounts SET password_ciphertext=?, password_nonce=?, password_key_version=1 WHERE id=?",
@@ -63,6 +63,10 @@ def seed_authenticated_secret(app, client) -> tuple[int, int]:
         conn.execute(
             "INSERT INTO account_service (account_id, service_id, status, registered) VALUES (?, ?, 'ativo', 1)",
             (account_id, service_id),
+        )
+        conn.execute(
+            "INSERT INTO service_members (user_id, service_id, role, created_at) VALUES (?, ?, 'service_admin', ?)",
+            (user_id, service_id, stamp),
         )
         conn.commit()
     with client.session_transaction() as session:
@@ -352,6 +356,47 @@ def test_app_js_new_behaviors(client):
         assert literal in script
 
 
+def test_app_js_bulk_selection_persists_and_typed_delete(client):
+    script = client.get("/static/js/app.js").get_data(as_text=True)
+
+    # Selection must survive hidden rows: refreshBulkSelection only re-renders, never deletes.
+    start = script.index("refreshBulkSelection = () => {")
+    end = script.index("}", start)
+    assert "selectedAccountIds.delete" not in script[start:end]
+    for literal in (
+        "visíveis",
+        "confirmation_count",
+        "delete-confirm-dialog",
+        "delete-confirm-input",
+        "/accounts/bulk/field",
+        "bulk-apply-field",
+    ):
+        assert literal in script
+
+
+def test_app_js_coverage_missing_registration_filter(client):
+    script = client.get("/static/js/app.js").get_data(as_text=True)
+
+    for literal in (
+        "missing-registration",
+        "data-coverage-service",
+        'getAttribute("data-reg-svc-"',
+        "checkedServices.length === 0",
+        "coverage-service-filter",
+    ):
+        assert literal in script
+
+
+def test_app_js_rotation_filter_combines_with_url_state(client):
+    script = client.get("/static/js/app.js").get_data(as_text=True)
+
+    for literal in (
+        "filter-rotation",
+        "dataset.rotation",
+        "rot:",
+    ):
+        assert literal in script
+
 def test_css_new_rules(client):
     css = client.get("/static/css/app.css").get_data(as_text=True)
 
@@ -361,6 +406,8 @@ def test_css_new_rules(client):
         ".copy-button.is-copied",
         "@media (min-width: 34rem)",
         'th[aria-sort="ascending"]',
+        ".coverage-service-label",
+        ".rotation-badge",
     ):
         assert rule in css
     assert "bottom: calc(100% + .2rem)" not in css

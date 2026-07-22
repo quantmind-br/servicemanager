@@ -8,6 +8,7 @@ import threading
 import sys
 import time
 from urllib.request import urlopen
+from collections.abc import Callable
 
 
 def _test_hooks_enabled() -> bool:
@@ -19,8 +20,8 @@ def _command(name: str, default: list[str]) -> list[str]:
     return shlex.split(configured) if configured else default
 
 
-def _terminate(processes: list[subprocess.Popen[object]]) -> None:
-    def _signal(process: subprocess.Popen[object], send: object) -> None:
+def _terminate(processes: list[subprocess.Popen[bytes]]) -> None:
+    def _signal(send: Callable[[], None]) -> None:
         try:
             send()
         except (OSError, ValueError):
@@ -28,13 +29,13 @@ def _terminate(processes: list[subprocess.Popen[object]]) -> None:
 
     for process in processes:
         if process.poll() is None:
-            _signal(process, process.terminate)
+            _signal(process.terminate)
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline and any(process.poll() is None for process in processes):
         time.sleep(0.1)
     for process in processes:
         if process.poll() is None:
-            _signal(process, process.kill)
+            _signal(process.kill)
     for process in processes:
         try:
             process.wait(timeout=5)
@@ -42,7 +43,7 @@ def _terminate(processes: list[subprocess.Popen[object]]) -> None:
             pass
 
 
-def _wait_for_gunicorn(gunicorn: subprocess.Popen[object], should_stop: threading.Event) -> bool:
+def _wait_for_gunicorn(gunicorn: subprocess.Popen[bytes], should_stop: threading.Event) -> bool:
     health_url = os.environ.get("SERVICE_MANAGER_HEALTH_URL", "http://127.0.0.1:8001/healthz") if _test_hooks_enabled() else "http://127.0.0.1:8001/healthz"
     for _ in range(30):
         if should_stop.is_set():
@@ -65,8 +66,15 @@ def main() -> int:
     signal.signal(signal.SIGTERM, lambda *_: should_stop.set())
     signal.signal(signal.SIGINT, lambda *_: should_stop.set())
 
-    processes: list[subprocess.Popen[object]] = []
+    processes: list[subprocess.Popen[bytes]] = []
     try:
+        worker = subprocess.Popen(
+            _command(
+                "SERVICE_MANAGER_WEBHOOK_WORKER_CMD",
+                ["python", "/app/scripts/webhook_worker.py"],
+            )
+        )
+        processes.append(worker)
         gunicorn = subprocess.Popen(
             _command(
                 "SERVICE_MANAGER_GUNICORN_CMD",

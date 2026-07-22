@@ -15,10 +15,12 @@ import sys
 from pathlib import Path
 
 import pytest
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts"))
 from app import create_app
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
-ROOT = Path(__file__).resolve().parents[1]
+from _pre_feature_schema import PRE_FEATURE_SCHEMA
 MIGRATE = ROOT / "scripts" / "migrate_legacy_db.py"
 VERIFY = ROOT / "scripts" / "verify_migrated_db.py"
 BACKUP = ROOT / "scripts" / "backup.py"
@@ -78,26 +80,7 @@ def _artifact_bytes(path: Path) -> bytes:
     return b"".join(part.read_bytes() for part in (path, Path(f"{path}-wal"), Path(f"{path}-shm")) if part.exists())
 
 
-OLD_SECURE_SCHEMA = zlib.decompress(base64.b85decode(
-    "c%1E6OK;;g5Wf3YuqVraw@A)K3i!cfg>|H@EMv1Lfh#dFH?pMa;jI6ChZH4I5+&Q)w1=Vw0yyMw9^cG-9D1^H@WRE&T`V^k5#NuC"
-    "D9?~FLGWP#GA$QBU<ZA6%*TcE6@9{A(PHP?rUeHdvE|N%Bs~xoA{Rfo$g<&Yx7nbbW&W|lXk~9U+=6AV7F%43CnU?>;xzDlmh5So"
-    "(;qonZtP`!xFZ(Dkxxe@Ug^m@(lldnRQp_sPG-MNT4821Ju;tOA7(@jR2yZ_ghbMlrlh56Rk7HPM~aUK<RmY$jt^^mzu0YDG>wYL"
-    "CsVZgh*zJGA!SVq8B>z8V?3Q#BJhPp<=SjkYF0xx8b{}fPg3&UcCh(ibtPxW!S~p~)(UUyN;3GmZGnp$4B$WstQKpm(W6*V^;D_S"
-    ">*>Mn7g-)3yk|zk;QI8QMZcf_a-C(6Xg{TS?_8am+bS!nEHZB9=(fs$Y#0TKxv;2%{e9pPIC)1B7Iia}OM?iUtze<dOG3gT(bgO-"
-    "b*Izu>Q>X`>Z+!*H3eI_Jy$%`;a17DP-|7q#TENEDqog@_|88@7d3O+RM5g&_p##w?adOs{(1|)a(7l6ww-YwM(y_<Y<%eNb^VYM"
-    "r7yEyX%<k*|K2^cC)r-t*l8Sg318+;?3C0R99YB|HBM+sf;g=y6<VG6K(ch07H$+;sAb!<aDeLc{5^?YAUo3G3wUPWSX*}<=ZT~v"
-    "eP;@RZexnY!M+r`ejGis^gsiTs2mUyaH=$#)1-Y4oFI8~pp%Ir2}X9CfkFh_v6|70yE!-@^s~`D@%tURk&q=c3Rv{worSI?*oCmQ"
-    "ISwU_pw_|z<<rDIev8_%^{8aPFSVN$k9x}&)5VA#wfQ@?dRybPFc9OJ9H>EQvM{)PaqJh^R|6gJVNm2ss!XXLgZK%WE~xKu&Y#1#"
-    "G?yGCJviEFpw?9@HP0I*x{FpywXR0N=@*VBfNGJl{N&Li{h1fZD~kd>bBi6p++qB}BJUZlj3T9+!Ba3s!kWLc;@fxXYY8Wdi<FOF"
-    "iEcCY!S_@{R!WqnwZ>1~C_V0*C(U|_8le_I>&S~(=9Qmw)$nDOswl3oRUNs?nu>@<wN{gSNEHFgf3^q)6HyJbd7OHkPN}ze_h}C0"
-    "Bz=K)&rgZ=DIm95ptR3{<^*mp;(gDgPF)ero4zG45U#SAKw+}D$jX-0yn_WkgS(xvRS8<(o@z5X<^u;>O#@JvS6;`HCFZ)(?(>=p"
-    "LuOSu*nKc9;lUP~edQu&VQ#UpSlW&Y-PTGi%MeL83x0^B@H7Pvu(dwxMnFT_xFIR!A9O>M<hMA^vpgjUu=OjAs<IUSXmTJ2(D^7W"
-    "w}j}Agrzhas9G4UvZ6Oxy%YJ$VY%$$ZlGQqQ8}enB+(Ty445s^myckz<*2+)dkIxvpk7M<EFkdeMolTyeFkYEycazdK?He~Yt!0d"
-    "$K@`lD*CzR!+w2ngI~b=a;JHS-#hkW=cj`*0!Y*yvhbH*n`h%4x~<iT55K*+$jB3}KHzfu?dp>*2m?q0kRclR=_!GE7qvl{&fYhc"
-    "o3U8*6U|sKFx!042h`xA4M;SZuHjpec;aMwq-C}{1=1y>dj%CJla{85K#zyo$oz7L?9IAan3Q<nCv)p=>*-Shep>?Fs=Ycd4sL!%"
-    "kxGM!im_p|O+!&BFJ)~F&6G^p4(chmIr~nZaTT+3Y*^+^sP#|ChX-56o|!KY<{kYUG9P&Ijpcg;fWqZk8qJ0%`-%=9x>Ww}@c&YW"
-    "{{_%KVHN"
-)).decode()
+PRE_FEATURE_SECURE_SCHEMA = PRE_FEATURE_SCHEMA
 
 
 def _append_synthetic_audit_events(conn: sqlite3.Connection, count: int = 25) -> None:
@@ -112,20 +95,27 @@ def _append_synthetic_audit_events(conn: sqlite3.Connection, count: int = 25) ->
         previous_hash = event_hash
 
 
-def _old_secure_source(path: Path, *, users: int = 1) -> None:
+def _old_secure_source(path: Path, *, users: int = 1, services: int = 1) -> None:
+    """Build a pre-feature-schema secure database (users already carry username,
+    no TOTP/recovery/bootstrap tables). Seeds services and users so the auth
+    cutover's membership backfill can be exercised."""
     conn = sqlite3.connect(path)
     try:
-        conn.executescript(OLD_SECURE_SCHEMA)
-        conn.execute("INSERT INTO services (id, name) VALUES (9, 'Synthetic service')")
-        conn.execute("INSERT INTO accounts (id, email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, ?, ?)", (41, "service@example.test", b"password-ciphertext", b"p" * 12, 1))
-        conn.execute("INSERT INTO custom_fields (id, service_id, name, is_secret) VALUES (12, 9, 'Token', 1)")
-        conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (41, 9, 'ativo')")
-        conn.execute("INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?)", (12, 41, b"field-ciphertext", b"f" * 12, 1))
+        conn.executescript(PRE_FEATURE_SECURE_SCHEMA)
+        for offset in range(services):
+            conn.execute("INSERT INTO services (id, name) VALUES (?, ?)", (9 + offset, f"Synthetic service {offset}"))
+        key = base64.b64decode(DATA_KEY)
+        acct_nonce = b"p" * 12
+        acct_cipher = AESGCM(key).encrypt(acct_nonce, b"account-secret", b"account:41:password")
+        conn.execute("INSERT INTO accounts (id, email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, ?, ?)", (41, "service@example.test", acct_cipher, acct_nonce, 1))
+        conn.execute("INSERT INTO custom_fields (id, service_id, name) VALUES (12, 9, 'Token')")
+        conn.execute("INSERT INTO account_service (account_id, service_id, status, registered) VALUES (41, 9, 'ativo', 1)")
+        field_nonce = b"f" * 12
+        field_cipher = AESGCM(key).encrypt(field_nonce, b"field-secret", b"account:41:field:12")
+        conn.execute("INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?)", (12, 41, field_cipher, field_nonce, 1))
         stamp = "2026-01-01T00:00:00Z"
         for user_id in range(1, users + 1):
-            conn.execute("INSERT INTO users (id, email, password_hash, role, is_active, must_change_password, totp_secret_ciphertext, totp_nonce, totp_key_version, totp_confirmed_at, last_totp_step, created_at, updated_at, password_changed_at, session_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (user_id, f"operator-{user_id}@example.test", f"argon2-hash-{user_id}", "admin" if user_id == 1 else "operador", 1, 0, b"totp-secret", b"t" * 12, 1, stamp, 77, stamp, stamp, stamp, 4))
-        conn.execute("INSERT INTO recovery_codes (user_id, code_hash) VALUES (1, 'recovery-hash')")
-        conn.execute("INSERT INTO bootstrap_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)", (b"bootstrap-token", 1, "2026-01-02T00:00:00Z"))
+            conn.execute("INSERT INTO users (id, username, password_hash, role, is_active, must_change_password, created_at, updated_at, password_changed_at, session_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (user_id, f"operator-{user_id}", f"argon2-hash-{user_id}", "admin" if user_id == 1 else "operador", 1, 0, stamp, stamp, stamp, 4))
         conn.execute("INSERT INTO security_events (id, kind, subject, source_ip, occurred_at) VALUES (7, 'login_failure', 'operator-1@example.test', '127.0.0.1', ?)", (stamp,))
         _append_synthetic_audit_events(conn)
         for table, sequence in {"accounts": 99, "services": 97, "custom_fields": 96, "users": 95, "security_events": 94, "audit_events": 93}.items():
@@ -143,55 +133,71 @@ def _table_rows(conn: sqlite3.Connection, table: str) -> list[tuple[object, ...]
 def test_auth_schema_migration_exposes_the_approved_api():
     migration = _script_module("migrate_auth_schema")
 
-    assert list(inspect.signature(migration.migrate).parameters) == ["source_path", "target_path", "username_map_path", "audit_key_env", "data_key_env"]
+    assert list(inspect.signature(migration.migrate).parameters) == ["source_path", "target_path", "audit_key_env", "data_key_env"]
     assert inspect.signature(migration.migrate).parameters["audit_key_env"].default == "AUDIT_KEY_V1"
     assert inspect.signature(migration.migrate).parameters["data_key_env"].default == "DATA_KEY_V1"
 
 
-def _run_auth_migration(source: Path, target: Path, username_map: dict[str, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    username_map_path = tmp_path / "username-map.json"
-    username_map_path.write_text(json.dumps(username_map), encoding="utf-8")
+def _run_auth_migration(source: Path, target: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AUDIT_KEY_V1", DATA_KEY)
     migration = _script_module("migrate_auth_schema")
-    migration.migrate(source, target, username_map_path, "AUDIT_KEY_V1")
+    migration.migrate(source, target, "AUDIT_KEY_V1")
 
 
-def test_auth_schema_migration_snapshots_wal_and_preserves_every_non_totp_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+_NEW_CANONICAL_TABLES = {
+    "accounts", "services", "account_service", "custom_fields", "field_values", "users",
+    "security_events", "audit_events", "service_members",
+    "webhook_configs", "webhook_subscriptions", "webhook_deliveries",
+}
+
+
+def test_auth_schema_migration_snapshots_wal_and_preserves_every_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     source = tmp_path / "old-secure.db"
     target = tmp_path / "new-secure.db"
-    _old_secure_source(source)
+    _old_secure_source(source, users=2)
     writer = sqlite3.connect(source)
     writer.execute("PRAGMA journal_mode = WAL")
     writer.execute("UPDATE services SET name = 'Confirmed WAL service' WHERE id = 9")
     writer.commit()
-    source_artifacts = _artifact_bytes(source)
     source_conn = sqlite3.connect(source)
     expected_audit_events = _table_rows(source_conn, "audit_events")
-    expected_business_rows = {table: _table_rows(source_conn, table) for table in ("services", "accounts", "security_events")}
+    preserved_queries = {
+        "services": "SELECT id, name FROM services ORDER BY id",
+        "accounts": "SELECT id, email, password_ciphertext, password_nonce, password_key_version FROM accounts ORDER BY id",
+        "security_events": "SELECT id, kind, subject, source_ip, occurred_at FROM security_events ORDER BY id",
+        "account_service": "SELECT account_id, service_id, status, registered FROM account_service ORDER BY account_id, service_id",
+    }
+    expected_business_rows = {table: [tuple(row) for row in source_conn.execute(query)] for table, query in preserved_queries.items()}
     expected_custom_fields = [(row[0], row[1], row[2]) for row in source_conn.execute("SELECT id, service_id, name FROM custom_fields ORDER BY id")]
     expected_field_values = [tuple(row) for row in source_conn.execute("SELECT field_id, account_id, value_ciphertext, value_nonce, value_key_version FROM field_values ORDER BY field_id, account_id")]
-    # The auth-era source predates account_service.registered; the migration must append it as 0.
-    expected_business_rows["account_service"] = [(*row, 0) for row in _table_rows(source_conn, "account_service")]
     expected_sequences = dict(source_conn.execute("SELECT name, seq FROM sqlite_sequence WHERE name IN ('accounts', 'services', 'custom_fields', 'users', 'security_events', 'audit_events')"))
-    expected_user = source_conn.execute("SELECT id, password_hash, role, is_active, must_change_password, created_at, updated_at, password_changed_at, session_version FROM users").fetchone()
+    expected_users = [tuple(row) for row in source_conn.execute("SELECT id, username, password_hash, role, is_active, must_change_password, created_at, updated_at, password_changed_at, session_version FROM users ORDER BY id")]
+    source_conn.close()
     source_artifacts = _artifact_bytes(source)
 
-    _run_auth_migration(source, target, {"1": "admin"}, tmp_path, monkeypatch)
+    _run_auth_migration(source, target, monkeypatch)
     assert source_artifacts == _artifact_bytes(source)
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
     assert not any(path.exists() for path in _sidecars(target))
     conn = sqlite3.connect(target)
     conn.row_factory = sqlite3.Row
-    assert {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")} == {"accounts", "services", "account_service", "custom_fields", "field_values", "users", "security_events", "audit_events"}
-    assert all(_table_rows(conn, table) == rows for table, rows in expected_business_rows.items())
+    assert {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")} == _NEW_CANONICAL_TABLES
+    assert all([tuple(row) for row in conn.execute(preserved_queries[table])] == rows for table, rows in expected_business_rows.items())
     assert [(row["id"], row["service_id"], row["name"]) for row in conn.execute("SELECT id, service_id, name FROM custom_fields ORDER BY id")] == expected_custom_fields
     assert [tuple(row) for row in conn.execute("SELECT field_id, account_id, value_ciphertext, value_nonce, value_key_version FROM field_values ORDER BY field_id, account_id")] == expected_field_values
     assert _table_rows(conn, "audit_events") == expected_audit_events
-    assert tuple(conn.execute("SELECT id, username, password_hash, role, is_active, must_change_password, created_at, updated_at, password_changed_at, session_version FROM users").fetchone()) == (expected_user[0], "admin", *expected_user[1:])
+    assert [tuple(row) for row in conn.execute("SELECT id, username, password_hash, role, is_active, must_change_password, created_at, updated_at, password_changed_at, session_version FROM users ORDER BY id")] == expected_users
     assert dict(conn.execute("SELECT name, seq FROM sqlite_sequence WHERE name IN ('accounts', 'services', 'custom_fields', 'users', 'security_events', 'audit_events')")) == expected_sequences
-    assert "email" not in _table_columns(conn, "users")
-    assert not {"recovery_codes", "bootstrap_tokens"} & {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-    assert not {"totp_secret_ciphertext", "totp_nonce", "totp_key_version", "totp_confirmed_at", "last_totp_step", "pending_totp_secret_ciphertext", "pending_totp_nonce", "pending_totp_key_version", "totp_enrollment_shown_at"} & _table_columns(conn, "users")
+    # New rotation metadata must be NULL.
+    assert conn.execute("SELECT COUNT(*) FROM accounts WHERE password_changed_at IS NOT NULL").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM services WHERE rotation_days IS NOT NULL").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM account_service WHERE rotation_days IS NOT NULL OR rotation_due_at IS NOT NULL").fetchone()[0] == 0
+    # New webhook tables must be empty.
+    for table in ("webhook_configs", "webhook_subscriptions", "webhook_deliveries"):
+        assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    # Membership backfill: one active non-admin user (id 2) x one service.
+    members = {tuple(row) for row in conn.execute("SELECT user_id, service_id, role FROM service_members")}
+    assert members == {(2, 9, "service_admin")}
     assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert list(conn.execute("PRAGMA foreign_key_check")) == []
     from service_manager.audit import verify_audit_chain_with_key
@@ -201,32 +207,50 @@ def test_auth_schema_migration_snapshots_wal_and_preserves_every_non_totp_value(
     writer.close()
 
 
-@pytest.mark.parametrize(
-    ("users", "username_map"),
-    (
-        (1, {}),
-        (1, {"1": "admin", "2": "extra"}),
-        (1, {"1": "not valid"}),
-        (2, {"1": "admin", "2": "ADMIN"}),
-    ),
-    ids=("incomplete", "extra", "invalid", "casefold-collision"),
-)
-def test_auth_schema_migration_rejects_invalid_username_maps_atomically(tmp_path: Path, users: int, username_map: dict[str, str], monkeypatch: pytest.MonkeyPatch):
+def test_auth_schema_migration_backfills_membership_for_active_non_admins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     source = tmp_path / "old-secure.db"
     target = tmp_path / "new-secure.db"
-    _old_secure_source(source, users=users)
+    # 1 admin + 2 operators, one deactivated; 2 services.
+    _old_secure_source(source, users=3, services=2)
+    conn = sqlite3.connect(source)
+    conn.execute("UPDATE users SET is_active = 0 WHERE id = 3")
+    conn.commit()
+    conn.close()
+
+    _run_auth_migration(source, target, monkeypatch)
+
+    migrated = sqlite3.connect(target)
+    try:
+        # Only user 2 (active operator) receives memberships, on both services.
+        members = {tuple(row) for row in migrated.execute("SELECT user_id, service_id, role FROM service_members")}
+        assert members == {(2, 9, "service_admin"), (2, 10, "service_admin")}
+        assert migrated.execute("SELECT COUNT(*) FROM service_members").fetchone()[0] == 2
+    finally:
+        migrated.close()
+
+
+def test_auth_schema_migration_rejects_incompatible_source_atomically(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source = tmp_path / "old-secure.db"
+    target = tmp_path / "new-secure.db"
+    _old_secure_source(source)
+    # Add a table absent from the frozen pre-feature schema to break source validation.
+    conn = sqlite3.connect(source)
+    conn.execute("CREATE TABLE rogue_table (id INTEGER PRIMARY KEY)")
+    conn.commit()
+    conn.close()
     source_artifacts = _artifact_bytes(source)
     sentinel = b"preexisting-target-bytes"
     target.write_bytes(sentinel)
 
     migration = _script_module("migrate_auth_schema")
-    with pytest.raises(migration.ScriptError):
-        _run_auth_migration(source, target, username_map, tmp_path, monkeypatch)
+    with pytest.raises(migration.ScriptError, match="source schema"):
+        _run_auth_migration(source, target, monkeypatch)
 
     assert source_artifacts == _artifact_bytes(source)
     assert target.read_bytes() == sentinel
     assert not any(tmp_path.glob(".new-secure.db.*.tmp*"))
     assert not any(path.exists() for path in _sidecars(target))
+
 
 def test_auth_schema_migration_preserves_empty_surviving_table_sequence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     source = tmp_path / "old-secure.db"
@@ -238,7 +262,7 @@ def test_auth_schema_migration_preserves_empty_surviving_table_sequence(tmp_path
     assert conn.execute("SELECT seq FROM sqlite_sequence WHERE name = 'security_events'").fetchone()[0] == 94
     conn.close()
 
-    _run_auth_migration(source, target, {"1": "admin"}, tmp_path, monkeypatch)
+    _run_auth_migration(source, target, monkeypatch)
 
     migrated = sqlite3.connect(target)
     assert migrated.execute("SELECT seq FROM sqlite_sequence WHERE name = 'security_events'").fetchone()[0] == 94
@@ -250,7 +274,7 @@ def test_auth_schema_migration_preserves_empty_surviving_table_sequence(tmp_path
     (
         ("table", "users", "CHECK (role IN ('admin', 'operador'))", "CHECK (role IN ('admin'))"),
         ("trigger", "audit_events_no_update", "audit_events is append-only", "audit mutation accepted"),
-        ("index", "bootstrap_tokens_one_active", "WHERE consumed_at IS NULL", "WHERE consumed_at IS NOT NULL"),
+        ("index", "security_events_occurred_at", "security_events(occurred_at)", "security_events(subject)"),
     ),
 )
 def test_auth_schema_migration_rejects_old_schema_object_semantic_weakening(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, object_type: str, name: str, before: str, after: str):
@@ -261,7 +285,7 @@ def test_auth_schema_migration_rejects_old_schema_object_semantic_weakening(tmp_
 
     migration = _script_module("migrate_auth_schema")
     with pytest.raises(migration.ScriptError, match="source schema"):
-        _run_auth_migration(source, target, {"1": "admin"}, tmp_path, monkeypatch)
+        _run_auth_migration(source, target, monkeypatch)
 
 def test_auth_schema_migration_restores_existing_target_when_rollback_cleanup_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     source = tmp_path / "old-secure.db"
@@ -270,16 +294,17 @@ def test_auth_schema_migration_restores_existing_target_when_rollback_cleanup_fa
     sentinel = b"preexisting-target-bytes"
     target.write_bytes(sentinel)
     migration = _script_module("migrate_auth_schema")
-    original_remove_artifacts = migration.remove_artifacts
+    migration_io = _script_module("_migration_io")
+    original_remove_artifacts = migration_io.remove_artifacts
 
     def fail_rollback_cleanup(*paths: Path | None) -> None:
         if any(path is not None and path.suffix == ".rollback" for path in paths):
-            raise migration.ScriptError("temporary artifact cleanup failed")
+            raise migration_io.ScriptError("temporary artifact cleanup failed")
         original_remove_artifacts(*paths)
 
-    monkeypatch.setattr(migration, "remove_artifacts", fail_rollback_cleanup)
+    monkeypatch.setattr(migration_io, "remove_artifacts", fail_rollback_cleanup)
     with pytest.raises(migration.ScriptError, match="recovery"):
-        _run_auth_migration(source, target, {"1": "admin"}, tmp_path, monkeypatch)
+        _run_auth_migration(source, target, monkeypatch)
     assert target.read_bytes() == sentinel
 
 def test_new_schema_backup_restore_round_trip_is_restorable_and_byte_for_byte_complete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -287,8 +312,8 @@ def test_new_schema_backup_restore_round_trip_is_restorable_and_byte_for_byte_co
     migrated = tmp_path / "new-secure.db"
     encrypted = tmp_path / "new-secure.smbk"
     restored = tmp_path / "restored.db"
-    _old_secure_source(source)
-    _run_auth_migration(source, migrated, {"1": "admin"}, tmp_path, monkeypatch)
+    _old_secure_source(source, users=2)
+    _run_auth_migration(source, migrated, monkeypatch)
     backup = _script_module("backup")
     restore = _script_module("restore_backup")
     monkeypatch.setenv("TEST_BACKUP_KEY", BACKUP_KEY)
@@ -308,29 +333,83 @@ def test_new_schema_backup_restore_round_trip_is_restorable_and_byte_for_byte_co
     assert restored_conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert list(restored_conn.execute("PRAGMA foreign_key_check")) == []
     assert verify_audit_chain_with_key(restored_conn, base64.b64decode(DATA_KEY))
-    tables = ("services", "accounts", "users", "custom_fields", "account_service", "field_values", "security_events", "audit_events")
+    tables = ("services", "accounts", "users", "custom_fields", "account_service", "field_values", "security_events", "audit_events", "service_members")
     assert all(_table_rows(source_conn, table) == _table_rows(restored_conn, table) for table in tables)
     assert _table_rows(source_conn, "sqlite_sequence") == _table_rows(restored_conn, "sqlite_sequence")
     source_conn.close()
     restored_conn.close()
 
+def test_auth_schema_migration_proof_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """End-to-end migration proof gate: exact preservation of old columns, NULL
+    rotation metadata, membership backfill, valid AES-GCM secrets, preserved
+    sequences, integrity/foreign-key health, canonical schema, and audit chain."""
+    source = tmp_path / "old-secure.db"
+    target = tmp_path / "new-secure.db"
+    _old_secure_source(source, users=3, services=2)
+
+    source_conn = sqlite3.connect(source)
+    source_conn.row_factory = sqlite3.Row
+    old_accounts = [tuple(row) for row in source_conn.execute("SELECT id, email, password_ciphertext, password_nonce, password_key_version FROM accounts ORDER BY id")]
+    old_services = [tuple(row) for row in source_conn.execute("SELECT id, name FROM services ORDER BY id")]
+    old_links = [tuple(row) for row in source_conn.execute("SELECT account_id, service_id, status, registered FROM account_service ORDER BY account_id, service_id")]
+    old_field_values = [tuple(row) for row in source_conn.execute("SELECT field_id, account_id, value_ciphertext, value_nonce, value_key_version FROM field_values ORDER BY field_id, account_id")]
+    old_users = [tuple(row) for row in source_conn.execute("SELECT id, username, password_hash, role, is_active, must_change_password, created_at, updated_at, password_changed_at, session_version FROM users ORDER BY id")]
+    old_audit = [tuple(row) for row in source_conn.execute("SELECT id, occurred_at, action, previous_hash, event_hash FROM audit_events ORDER BY id")]
+    old_sequences = dict(source_conn.execute("SELECT name, seq FROM sqlite_sequence WHERE name IN ('accounts', 'services', 'custom_fields', 'users', 'security_events', 'audit_events')"))
+    source_conn.close()
+    assert len(old_audit) == 25
+
+    _run_auth_migration(source, target, monkeypatch)
+
+    conn = sqlite3.connect(target)
+    conn.row_factory = sqlite3.Row
+    try:
+        assert [tuple(row) for row in conn.execute("SELECT id, email, password_ciphertext, password_nonce, password_key_version FROM accounts ORDER BY id")] == old_accounts
+        assert [tuple(row) for row in conn.execute("SELECT id, name FROM services ORDER BY id")] == old_services
+        assert [tuple(row) for row in conn.execute("SELECT account_id, service_id, status, registered FROM account_service ORDER BY account_id, service_id")] == old_links
+        assert [tuple(row) for row in conn.execute("SELECT field_id, account_id, value_ciphertext, value_nonce, value_key_version FROM field_values ORDER BY field_id, account_id")] == old_field_values
+        assert [tuple(row) for row in conn.execute("SELECT id, username, password_hash, role, is_active, must_change_password, created_at, updated_at, password_changed_at, session_version FROM users ORDER BY id")] == old_users
+        assert [tuple(row) for row in conn.execute("SELECT id, occurred_at, action, previous_hash, event_hash FROM audit_events ORDER BY id")] == old_audit
+        # NULL rotation metadata everywhere.
+        assert conn.execute("SELECT COUNT(*) FROM accounts WHERE password_changed_at IS NOT NULL").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM services WHERE rotation_days IS NOT NULL").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM account_service WHERE rotation_days IS NOT NULL OR rotation_due_at IS NOT NULL").fetchone()[0] == 0
+        # service_admin membership for each active non-admin x service (users 2,3 active operators; 2 services).
+        active_non_admin = [row[0] for row in conn.execute("SELECT id FROM users WHERE is_active = 1 AND role != 'admin' ORDER BY id")]
+        services = [row[0] for row in conn.execute("SELECT id FROM services ORDER BY id")]
+        expected_members = {(u, s, "service_admin") for u in active_non_admin for s in services}
+        assert {tuple(row) for row in conn.execute("SELECT user_id, service_id, role FROM service_members")} == expected_members
+        assert conn.execute("SELECT COUNT(*) FROM service_members").fetchone()[0] == len(active_non_admin) * len(services)
+        # Valid AES-GCM secrets under the data key.
+        key = base64.b64decode(DATA_KEY)
+        for row in conn.execute("SELECT id, password_ciphertext, password_nonce FROM accounts ORDER BY id"):
+            AESGCM(key).decrypt(bytes(row["password_nonce"]), bytes(row["password_ciphertext"]), f"account:{row['id']}:password".encode())
+        # Preserved sequences.
+        assert dict(conn.execute("SELECT name, seq FROM sqlite_sequence WHERE name IN ('accounts', 'services', 'custom_fields', 'users', 'security_events', 'audit_events')")) == old_sequences
+        # Integrity, foreign keys, canonical schema, and audit chain.
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert list(conn.execute("PRAGMA foreign_key_check")) == []
+        from service_manager.db import schema_is_current
+        from service_manager.audit import verify_audit_chain_with_key
+        assert schema_is_current(conn)
+        assert verify_audit_chain_with_key(conn, key)
+    finally:
+        conn.close()
+
 def test_auth_schema_migration_cli_reports_safe_validated_counts(tmp_path: Path):
     source = tmp_path / "old-secure.db"
     target = tmp_path / "new-secure.db"
-    username_map = tmp_path / "username-map.json"
-    _old_secure_source(source)
-    username_map.write_text('{"1":"admin"}', encoding="utf-8")
+    _old_secure_source(source, users=2)
 
     result = _run(
         AUTH_MIGRATE,
         "--source", str(source),
         "--target", str(target),
-        "--username-map", str(username_map),
         env={"AUDIT_KEY_V1": DATA_KEY},
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "OK: users=1 accounts=1 audit_events=25"
+    assert result.stdout.strip() == "OK: users=2 accounts=1 audit_events=25 service_members=1"
 
 def test_compare_business_data_reports_matching_secret_free_legacy_and_secure_digests(tmp_path: Path):
     source = tmp_path / "legacy.db"
@@ -355,7 +434,7 @@ def test_record_auth_migration_appends_one_idempotent_audit_event(tmp_path: Path
     source = tmp_path / "old-secure.db"
     migrated = tmp_path / "new-secure.db"
     _old_secure_source(source)
-    _run_auth_migration(source, migrated, {"1": "admin"}, tmp_path, monkeypatch)
+    _run_auth_migration(source, migrated, monkeypatch)
     recorder = _script_module("record_auth_migration")
     monkeypatch.setenv("DATABASE_PATH", str(migrated))
     monkeypatch.setenv("DATA_KEY_V1", DATA_KEY)
@@ -381,7 +460,7 @@ def test_audit_events_append_contiguous_ids_despite_high_preserved_sequence(tmp_
     source = tmp_path / "old-secure.db"
     migrated = tmp_path / "new-secure.db"
     _old_secure_source(source)
-    _run_auth_migration(source, migrated, {"1": "admin"}, tmp_path, monkeypatch)
+    _run_auth_migration(source, migrated, monkeypatch)
 
     app = create_app(
         {
@@ -1280,45 +1359,34 @@ def test_verifier_converts_corrupt_target_relationship_lookup_to_generic_script_
     assert "migration-password-2-only" not in result.stdout + result.stderr
 
 
-def _strip_registered_column(source: Path, destination: Path) -> None:
-    """Rebuild `source` under the historical pre-registered schema at `destination`."""
-    from service_manager.db import SCHEMA
-
+def _build_pre_registered_source(path: Path) -> None:
+    """Build a source under the registered tool's frozen pre-registered schema."""
+    migration = _script_module("migrate_registered_column")
     registered_line = "    registered INTEGER NOT NULL DEFAULT 0 CHECK (registered IN (0, 1)),\n"
-    assert registered_line in SCHEMA
-    old_schema = SCHEMA.replace(registered_line, "")
-    src = sqlite3.connect(source)
-    dst = sqlite3.connect(destination)
+    assert registered_line in migration.TARGET_SCHEMA
+    old_schema = migration.TARGET_SCHEMA.replace(registered_line, "")
+    conn = sqlite3.connect(path)
     try:
-        dst.executescript(old_schema)
-        for table in ("services", "accounts", "users", "custom_fields", "field_values", "security_events", "audit_events"):
-            rows = [tuple(row) for row in src.execute(f"SELECT * FROM {table}")]
-            if rows:
-                placeholders = ", ".join("?" for _ in rows[0])
-                dst.executemany(f"INSERT INTO {table} VALUES ({placeholders})", rows)
-        dst.executemany(
-            "INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, ?)",
-            [tuple(row) for row in src.execute("SELECT account_id, service_id, status FROM account_service")],
-        )
-        dst.execute("DELETE FROM sqlite_sequence")
-        dst.executemany(
-            "INSERT INTO sqlite_sequence (name, seq) VALUES (?, ?)",
-            [tuple(row) for row in src.execute("SELECT name, seq FROM sqlite_sequence")],
-        )
-        dst.commit()
+        conn.executescript(old_schema)
+        stamp = "2026-01-01T00:00:00Z"
+        conn.execute("INSERT INTO services (id, name) VALUES (9, 'Synthetic service')")
+        conn.execute("INSERT INTO accounts (id, email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, ?, ?)", (41, "service@example.test", b"password-ciphertext", b"p" * 12, 1))
+        conn.execute("INSERT INTO custom_fields (id, service_id, name) VALUES (12, 9, 'Token')")
+        conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (41, 9, 'ativo')")
+        conn.execute("INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?)", (12, 41, b"field-ciphertext", b"f" * 12, 1))
+        conn.execute("INSERT INTO users (id, username, password_hash, role, is_active, must_change_password, created_at, updated_at, session_version) VALUES (1, 'admin', 'hash', 'admin', 1, 0, ?, ?, 0)", (stamp, stamp))
+        _append_synthetic_audit_events(conn, count=3)
+        for table, seq in {"accounts": 41, "services": 9, "custom_fields": 12, "users": 1, "audit_events": 3}.items():
+            conn.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = ?", (seq, table))
+        conn.commit()
     finally:
-        src.close()
-        dst.close()
-    os.chmod(destination, 0o600)
+        conn.close()
+    os.chmod(path, 0o600)
 
 
 def test_registered_column_migration_preserves_every_value_and_rejects_migrated_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    old = tmp_path / "old-secure.db"
-    base = tmp_path / "auth-migrated.db"
-    _old_secure_source(old)
-    _run_auth_migration(old, base, {"1": "admin"}, tmp_path, monkeypatch)
     source = tmp_path / "pre-registered.db"
-    _strip_registered_column(base, source)
+    _build_pre_registered_source(source)
     source_bytes = source.read_bytes()
     target = tmp_path / "with-registered.db"
 
@@ -1349,14 +1417,13 @@ def test_registered_column_migration_preserves_every_value_and_rejects_migrated_
 
 
 def test_service_index_migration_adds_index_preserves_data_and_rejects_migrated_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    from service_manager.db import SCHEMA, schema_is_current
-
+    migration = _script_module("migrate_service_index")
     index_line = "CREATE INDEX account_service_service_id ON account_service(service_id);"
-    assert index_line in SCHEMA
+    assert index_line in migration.TARGET_SCHEMA
     source = tmp_path / "pre-index.db"
     conn = sqlite3.connect(source)
     try:
-        conn.executescript(SCHEMA.replace(index_line, ""))
+        conn.executescript(migration.TARGET_SCHEMA.replace(index_line, ""))
         conn.execute("INSERT INTO services (id, name) VALUES (9, 'Synthetic service')")
         conn.execute("INSERT INTO accounts (id, email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, ?, ?)", (41, "service@example.test", b"password-ciphertext", b"p" * 12, 1))
         conn.execute("INSERT INTO account_service (account_id, service_id, status, registered) VALUES (41, 9, 'ativo', 1)")
@@ -1371,7 +1438,6 @@ def test_service_index_migration_adds_index_preserves_data_and_rejects_migrated_
     source_bytes = source.read_bytes()
     target = tmp_path / "with-index.db"
 
-    migration = _script_module("migrate_service_index")
     monkeypatch.setenv("AUDIT_KEY_V1", DATA_KEY)
     migration.migrate(source, target, "AUDIT_KEY_V1")
 
@@ -1382,7 +1448,7 @@ def test_service_index_migration_adds_index_preserves_data_and_rejects_migrated_
     dst_conn.row_factory = sqlite3.Row
     try:
         assert dst_conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='account_service_service_id'").fetchone()[0] == 1
-        assert schema_is_current(dst_conn)
+        migration.structural_schema_valid(dst_conn, migration._TARGET_OBJECTS, migration._TARGET_COLUMNS)
         for table in ("services", "accounts", "account_service", "custom_fields", "field_values", "users", "security_events", "audit_events"):
             assert _table_rows(dst_conn, table) == _table_rows(src_conn, table)
         from _secure_db import load_key
@@ -1444,9 +1510,8 @@ def test_unclassified_fields_migration_encrypts_all_fields_and_rejects_migrated_
     conn = sqlite3.connect(target)
     conn.row_factory = sqlite3.Row
     try:
-        from service_manager.db import schema_is_current
         from service_manager.audit import verify_audit_chain_with_key
-        assert schema_is_current(conn)
+        migration.structural_schema_valid(conn, migration._TARGET_OBJECTS, migration._TARGET_COLUMNS)
         assert "is_secret" not in {row[1] for row in conn.execute("PRAGMA table_info(custom_fields)")}
         assert {row[1] for row in conn.execute("PRAGMA table_info(field_values)")} == {"field_id", "account_id", "value_ciphertext", "value_nonce", "value_key_version"}
         values = {}

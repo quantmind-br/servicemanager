@@ -10,17 +10,22 @@ from pathlib import Path
 EXPECTED_COUNTS = {"accounts": 116, "account_service": 116, "field_values": 116, "credentials_backup": 116}
 EXPECTED_SECURE_TABLES = {
     "accounts", "services", "account_service", "custom_fields", "field_values", "users",
-    "security_events", "audit_events",
+    "security_events", "audit_events", "service_members",
+    "webhook_configs", "webhook_subscriptions", "webhook_deliveries",
 }
 EXPECTED_SECURE_COLUMNS = {
-    "accounts": {"id", "email", "password_ciphertext", "password_nonce", "password_key_version"},
-    "services": {"id", "name"},
-    "account_service": {"account_id", "service_id", "status", "registered"},
+    "accounts": {"id", "email", "password_ciphertext", "password_nonce", "password_key_version", "password_changed_at"},
+    "services": {"id", "name", "rotation_days"},
+    "account_service": {"account_id", "service_id", "status", "registered", "rotation_days", "rotation_due_at"},
     "custom_fields": {"id", "service_id", "name"},
     "field_values": {"field_id", "account_id", "value_ciphertext", "value_nonce", "value_key_version"},
     "users": {"id", "username", "password_hash", "role", "is_active", "must_change_password", "created_at", "updated_at", "password_changed_at", "session_version"},
     "security_events": {"id", "kind", "subject", "source_ip", "occurred_at"},
     "audit_events": {"id", "occurred_at", "actor_user_id", "action", "target_type", "target_id", "metadata_json", "source_ip", "user_agent", "previous_hash", "event_hash"},
+    "service_members": {"user_id", "service_id", "role", "created_at"},
+    "webhook_configs": {"id", "destination_host", "url_ciphertext", "url_nonce", "url_key_version", "description", "enabled", "signing_secret_ciphertext", "signing_secret_nonce", "signing_secret_key_version", "created_at", "updated_at", "deleted_at"},
+    "webhook_subscriptions": {"config_id", "event_type"},
+    "webhook_deliveries": {"id", "config_id", "event_type", "payload_json", "status", "attempt_count", "next_attempt_at", "lease_token", "leased_at", "last_status_code", "last_error", "created_at", "delivered_at"},
 }
 REQUIRED_TRIGGERS = {
     "audit_events_no_update", "audit_events_no_delete",
@@ -39,6 +44,7 @@ def load_key(env_name: str) -> bytes:
     value = os.environ.get(env_name)
     if not value:
         fail("configured encryption key is unavailable")
+    assert value is not None
     try:
         key = base64.b64decode(value, validate=True)
     except (ValueError, binascii.Error) as error:

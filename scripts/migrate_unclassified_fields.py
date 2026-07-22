@@ -12,21 +12,122 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from _secure_db import (
-    CANONICAL_SECURE_SCHEMA,
     ScriptError,
-    _normalize_schema_sql,
     ensure_mode,
     load_key,
     remove_artifacts,
     require_offline_target,
-    secure_schema_structure_valid,
     sidecars,
 )
-from migrate_auth_schema import _copy_rows, _create_schema, _place, _snapshot
+from _migration_io import (
+    _copy_rows,
+    _create_schema,
+    _place,
+    _snapshot,
+    _normalize_schema_sql,
+    frozen_schema_objects,
+    normalized_objects,
+    structural_schema_valid,
+)
 from service_manager.audit import verify_audit_chain_with_key
 
+# Frozen, independent copy of this tool's TARGET schema: the canonical schema as
+# it existed when this historical migration shipped (before the feature pack).
+# Deliberately not imported from _secure_db or _pre_feature_schema so this frozen
+# utility keeps behaving identically regardless of later canonical schema changes.
+TARGET_SCHEMA = """
+CREATE TABLE accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_ciphertext BLOB NOT NULL,
+    password_nonce BLOB NOT NULL,
+    password_key_version INTEGER NOT NULL
+);
+CREATE TABLE services (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+);
+CREATE TABLE account_service (
+    account_id INTEGER NOT NULL,
+    service_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'nunca' CHECK (status IN ('ativo', 'nunca', 'inativo')),
+    registered INTEGER NOT NULL DEFAULT 0 CHECK (registered IN (0, 1)),
+    PRIMARY KEY (account_id, service_id),
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
+    FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE CASCADE
+);
+CREATE TABLE custom_fields (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    service_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    UNIQUE (service_id, name),
+    FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE CASCADE
+);
+CREATE TABLE field_values (
+    field_id INTEGER NOT NULL,
+    account_id INTEGER NOT NULL,
+    value_ciphertext BLOB NOT NULL,
+    value_nonce BLOB NOT NULL,
+    value_key_version INTEGER NOT NULL,
+    PRIMARY KEY (field_id, account_id),
+    FOREIGN KEY (field_id) REFERENCES custom_fields(id) ON DELETE CASCADE,
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+CREATE INDEX account_service_service_id ON account_service(service_id);
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('admin', 'operador')),
+    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+    must_change_password INTEGER NOT NULL DEFAULT 0 CHECK (must_change_password IN (0, 1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    password_changed_at TEXT,
+    session_version INTEGER NOT NULL DEFAULT 0 CHECK (session_version >= 0)
+);
+CREATE TABLE security_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL CHECK (kind IN ('login_failure', 'reveal')),
+    subject TEXT NOT NULL,
+    source_ip TEXT NOT NULL,
+    occurred_at TEXT NOT NULL
+);
+CREATE INDEX security_events_kind_subject_occurred_at
+    ON security_events(kind, subject, occurred_at);
+CREATE INDEX security_events_kind_source_ip_occurred_at
+    ON security_events(kind, source_ip, occurred_at);
+CREATE INDEX security_events_occurred_at ON security_events(occurred_at);
+CREATE TABLE audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    occurred_at TEXT NOT NULL,
+    actor_user_id INTEGER,
+    action TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT,
+    metadata_json TEXT,
+    source_ip TEXT,
+    user_agent TEXT,
+    previous_hash BLOB NOT NULL,
+    event_hash BLOB NOT NULL,
+    FOREIGN KEY (actor_user_id) REFERENCES users(id)
+);
+CREATE TRIGGER audit_events_no_update
+BEFORE UPDATE ON audit_events
+BEGIN
+    SELECT RAISE(ABORT, 'audit_events is append-only');
+END;
+CREATE TRIGGER audit_events_no_delete
+BEFORE DELETE ON audit_events
+BEGIN
+    SELECT RAISE(ABORT, 'audit_events is append-only');
+END;
+"""
+
+_TARGET_OBJECTS, _TARGET_COLUMNS = frozen_schema_objects(TARGET_SCHEMA)
+
 # The pre-cutover custom_fields/field_values definitions, frozen independently of
-# service_manager.db.SCHEMA (which is now the encrypted-only post-cutover schema).
+# the canonical schema (which is now the encrypted-only post-cutover schema).
 _OLD_CUSTOM_FIELDS_SQL = _normalize_schema_sql(
     """CREATE TABLE custom_fields (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -116,16 +217,8 @@ _COPY_COLUMNS = {
 _SEQUENCE_TABLES = ("accounts", "services", "custom_fields", "users", "security_events", "audit_events")
 
 
-def _normalized_objects(conn: sqlite3.Connection, kind: str) -> dict[str, str]:
-    return {
-        row[0]: _normalize_schema_sql(row[1])
-        for row in conn.execute("SELECT name, sql FROM sqlite_master WHERE type = ? AND name NOT LIKE 'sqlite_%'", (kind,))
-        if row[1]
-    }
-
-
 def _expected_old_objects() -> dict[str, dict[str, str]]:
-    expected = {kind: dict(objects) for kind, objects in CANONICAL_SECURE_SCHEMA.items()}
+    expected = {kind: dict(objects) for kind, objects in _TARGET_OBJECTS.items()}
     expected["table"]["custom_fields"] = _OLD_CUSTOM_FIELDS_SQL
     expected["table"]["field_values"] = _OLD_FIELD_VALUES_SQL
     expected["trigger"].update(_OLD_REPRESENTATION_TRIGGERS)
@@ -134,7 +227,7 @@ def _expected_old_objects() -> dict[str, dict[str, str]]:
 
 def _validate_old_source(conn: sqlite3.Connection, audit_key: bytes) -> None:
     try:
-        if any(_normalized_objects(conn, kind) != objects for kind, objects in _expected_old_objects().items()):
+        if any(normalized_objects(conn, kind) != objects for kind, objects in _expected_old_objects().items()):
             raise ScriptError("source schema is incompatible")
         if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise ScriptError("source integrity validation failed")
@@ -180,7 +273,7 @@ def _copy(source: sqlite3.Connection, destination: sqlite3.Connection, data_key:
         "INSERT INTO account_service (account_id, service_id, status, registered) VALUES (?, ?, ?, ?)",
         copied["account_service"],
     )
-    field_values: list[tuple[int, int, str]] = []
+    field_values: list[tuple[object, ...]] = []
     for row in source.execute("SELECT field_id, account_id, value_plaintext, value_ciphertext, value_nonce, value_key_version FROM field_values ORDER BY field_id, account_id"):
         if row["value_plaintext"] is None:
             if row["value_key_version"] != 1 or row["value_nonce"] is None or len(bytes(row["value_nonce"])) != 12:
@@ -210,7 +303,7 @@ def _copy(source: sqlite3.Connection, destination: sqlite3.Connection, data_key:
 
 
 def _validate_destination(conn: sqlite3.Connection, copied: dict[str, list[tuple[object, ...]]], sequences: dict[str, int], audit_key: bytes, data_key: bytes) -> None:
-    secure_schema_structure_valid(conn)
+    structural_schema_valid(conn, _TARGET_OBJECTS, _TARGET_COLUMNS)
     try:
         if conn.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
             raise ScriptError("target foreign-key enforcement is disabled")
@@ -269,7 +362,7 @@ def migrate(source_path: Path, target_path: Path, data_key_env: str = "DATA_KEY_
         if destination.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
             raise ScriptError("target foreign-key enforcement is disabled")
         destination.execute("BEGIN IMMEDIATE")
-        _create_schema(destination)
+        _create_schema(destination, TARGET_SCHEMA)
         copied, sequences = _copy(source, destination, data_key)
         _validate_destination(destination, copied, sequences, audit_key, data_key)
         destination.commit()

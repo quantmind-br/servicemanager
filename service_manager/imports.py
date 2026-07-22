@@ -7,7 +7,7 @@ import zipfile
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Iterator
 from pathlib import PurePosixPath, PureWindowsPath
-from typing import BinaryIO, Final
+from typing import Final, IO
 
 MAX_RECORDS: Final = 5_000
 MAX_COLUMNS: Final = 20
@@ -39,7 +39,7 @@ def has_allowed_upload_mimetype(filename: str, mimetype: str | None) -> bool:
     return any(normalized_name.endswith(extension) and normalized_mimetype in allowed for extension, allowed in _ALLOWED_UPLOAD_MIME_TYPES.items())
 
 
-def _as_binary_stream(data: bytes | BinaryIO) -> BinaryIO:
+def _as_binary_stream(data: bytes | IO[bytes]) -> IO[bytes]:
     if isinstance(data, bytes):
         return io.BytesIO(data)
     return data
@@ -61,7 +61,7 @@ def _validate_row_shape(row: list[str], *, cells: int) -> int:
     return cells
 
 
-def _csv_rows(stream: BinaryIO) -> Iterator[list[str]]:
+def _csv_rows(stream: IO[bytes]) -> Iterator[list[str]]:
     try:
         text = io.TextIOWrapper(stream, encoding="utf-8-sig", newline="")
         first_line = text.readline()
@@ -114,7 +114,7 @@ def _validate_relationships(archive: zipfile.ZipFile, member: zipfile.ZipInfo) -
         if attributes.get("TargetMode") == "External":
             raise ImportFormatError("format", "XLSX external relationships are not allowed")
 
-def _validate_xlsx_archive(stream: BinaryIO) -> None:
+def _validate_xlsx_archive(stream: IO[bytes]) -> None:
     try:
         stream.seek(0)
         with zipfile.ZipFile(stream) as archive:
@@ -147,7 +147,7 @@ def _validate_xlsx_archive(stream: BinaryIO) -> None:
         raise ImportFormatError("format", "invalid XLSX archive") from error
 
 
-def _xlsx_rows(stream: BinaryIO) -> Iterator[list[str]]:
+def _xlsx_rows(stream: IO[bytes]) -> Iterator[list[str]]:
     _validate_xlsx_archive(stream)
     try:
         from openpyxl import load_workbook
@@ -156,6 +156,8 @@ def _xlsx_rows(stream: BinaryIO) -> Iterator[list[str]]:
         workbook = load_workbook(stream, read_only=True, data_only=True, keep_links=False)
         try:
             worksheet = workbook.active
+            if worksheet is None:
+                raise ImportFormatError("format", "XLSX workbook has no active worksheet")
             cells = 0
             for raw_row in worksheet.iter_rows(values_only=True):
                 row = [_checked_cell(value) for value in raw_row]
@@ -169,7 +171,7 @@ def _xlsx_rows(stream: BinaryIO) -> Iterator[list[str]]:
         raise ImportFormatError("format", "invalid XLSX workbook") from error
 
 
-def _import_rows(filename: str, stream: BinaryIO) -> Iterator[list[str]]:
+def _import_rows(filename: str, stream: IO[bytes]) -> Iterator[list[str]]:
     normalized_name = filename.strip().lower()
     if normalized_name.endswith(".csv"):
         yield from _csv_rows(stream)
@@ -180,7 +182,7 @@ def _import_rows(filename: str, stream: BinaryIO) -> Iterator[list[str]]:
     raise ImportFormatError("format", "unsupported import format")
 
 
-def parse_import_file(filename: str, data: bytes | BinaryIO) -> list[tuple[str, str, str]]:
+def parse_import_file(filename: str, data: bytes | IO[bytes]) -> list[tuple[str, str, str]]:
     """Strictly parse a supported import stream without accepting lossy encodings."""
     rows = (row for row in _import_rows(filename, _as_binary_stream(data)) if any(row))
     try:

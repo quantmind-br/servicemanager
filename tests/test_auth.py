@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import create_app
 from service_manager.crypto import hash_password, verify_password
-from service_manager.db import SCHEMA, get_db
+from service_manager.db import SCHEMA, get_db, inserted_id
 
 KEY = base64.b64encode(b"k" * 32).decode("ascii")
 INITIAL_PASSWORD = "12345678"
@@ -57,11 +57,11 @@ def insert_user(
 ) -> int:
     with app.app_context():
         stamp = datetime.now(UTC).isoformat()
-        user_id = get_db().execute(
+        user_id = inserted_id(get_db().execute(
             "INSERT INTO users (username, password_hash, role, is_active, must_change_password, created_at, updated_at, password_changed_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (username, hash_password(password), role, int(active), int(must_change_password), stamp, stamp, stamp),
-        ).lastrowid
+        ))
         get_db().commit()
     return user_id
 

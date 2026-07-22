@@ -12,7 +12,8 @@ from service_manager.auth import auth, bind_auth
 from service_manager.csrf import init_app as init_csrf_app
 from service_manager.audit import verify_audit_chain
 
-from service_manager.db import init_app as init_db_app
+from service_manager.db import get_db, init_app as init_db_app
+from service_manager.webhooks import record_audit_degraded
 from service_manager.routes import routes
 
 
@@ -53,7 +54,7 @@ def create_app(config: Mapping[str, Any] | None = None) -> Flask:
         audit_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     configured_origin = config.get("PUBLIC_ORIGIN") if config else None
     public_origin = configured_origin if configured_origin is not None else os.environ.get("PUBLIC_ORIGIN", "https://servicemanager.quantmind.com.br")
-    seed_config = {
+    seed_config: dict[str, Any] = {
         name: value
         for name in ("ADMIN_USERNAME", "ADMIN_PASSWORD")
         if (value := (config[name] if config and name in config else os.environ.get(name))) is not None
@@ -85,6 +86,10 @@ def create_app(config: Mapping[str, Any] | None = None) -> Flask:
         app.config["AUDIT_CHAIN_HEALTHY"] = verify_audit_chain()
         if not app.config["AUDIT_CHAIN_HEALTHY"]:
             app.logger.critical("audit chain verification failed during startup")
+            try:
+                record_audit_degraded(get_db())
+            except Exception:
+                app.logger.critical("failed to enqueue audit_chain_degraded alert during startup")
     app.jinja_env.globals["asset_ver"] = lambda filename: _asset_version(app.static_folder or "static", filename)
     @app.errorhandler(400)
     @app.errorhandler(403)

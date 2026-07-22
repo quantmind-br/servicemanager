@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 import re
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from _secure_db import ScriptError, ensure_mode, load_key, open_source_read_only, remove_artifacts, sidecars, validate_restorable_database
+from _secure_db import ScriptError, ensure_mode, load_key, open_source_read_only, remove_artifacts, validate_restorable_database
 from service_manager.audit import verify_audit_chain_with_key
 
 MAGIC = b"SMBK"

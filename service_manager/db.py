@@ -4,6 +4,7 @@ import os
 import stat
 import sqlite3
 from collections.abc import Iterator
+from typing import Protocol
 from contextlib import contextmanager
 from pathlib import Path
 import time
@@ -21,17 +22,21 @@ CREATE TABLE accounts (
     email TEXT NOT NULL UNIQUE COLLATE NOCASE,
     password_ciphertext BLOB NOT NULL,
     password_nonce BLOB NOT NULL,
-    password_key_version INTEGER NOT NULL
+    password_key_version INTEGER NOT NULL,
+    password_changed_at TEXT
 );
 CREATE TABLE services (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE
+    name TEXT NOT NULL UNIQUE,
+    rotation_days INTEGER CHECK (rotation_days IS NULL OR rotation_days BETWEEN 1 AND 3650)
 );
 CREATE TABLE account_service (
     account_id INTEGER NOT NULL,
     service_id INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'nunca' CHECK (status IN ('ativo', 'nunca', 'inativo')),
     registered INTEGER NOT NULL DEFAULT 0 CHECK (registered IN (0, 1)),
+    rotation_days INTEGER CHECK (rotation_days IS NULL OR rotation_days BETWEEN 1 AND 3650),
+    rotation_due_at TEXT,
     PRIMARY KEY (account_id, service_id),
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE,
     FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE CASCADE
@@ -68,7 +73,7 @@ CREATE TABLE users (
 );
 CREATE TABLE security_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind TEXT NOT NULL CHECK (kind IN ('login_failure', 'reveal')),
+    kind TEXT NOT NULL CHECK (kind IN ('login_failure', 'reveal', 'reveal_blocked', 'audit_degraded')),
     subject TEXT NOT NULL,
     source_ip TEXT NOT NULL,
     occurred_at TEXT NOT NULL
@@ -102,6 +107,55 @@ BEFORE DELETE ON audit_events
 BEGIN
     SELECT RAISE(ABORT, 'audit_events is append-only');
 END;
+CREATE TABLE service_members (
+    user_id INTEGER NOT NULL,
+    service_id INTEGER NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('viewer', 'editor', 'service_admin')),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, service_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE CASCADE
+);
+CREATE INDEX service_members_service_id ON service_members(service_id, user_id);
+CREATE TABLE webhook_configs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    destination_host TEXT NOT NULL,
+    url_ciphertext BLOB NOT NULL,
+    url_nonce BLOB NOT NULL,
+    url_key_version INTEGER NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    signing_secret_ciphertext BLOB NOT NULL,
+    signing_secret_nonce BLOB NOT NULL,
+    signing_secret_key_version INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+);
+CREATE TABLE webhook_subscriptions (
+    config_id INTEGER NOT NULL,
+    event_type TEXT NOT NULL CHECK (event_type IN ('login_failures', 'reveal_rate_limit', 'authorization_failure', 'audit_chain_degraded', 'user_deactivated', 'destructive_admin_action')),
+    PRIMARY KEY (config_id, event_type),
+    FOREIGN KEY (config_id) REFERENCES webhook_configs(id) ON DELETE CASCADE
+);
+CREATE TABLE webhook_deliveries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    config_id INTEGER NOT NULL,
+    event_type TEXT NOT NULL CHECK (event_type IN ('login_failures', 'reveal_rate_limit', 'authorization_failure', 'audit_chain_degraded', 'user_deactivated', 'destructive_admin_action', 'test')),
+    payload_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'delivering', 'retry', 'succeeded', 'failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 5),
+    next_attempt_at TEXT NOT NULL,
+    lease_token TEXT,
+    leased_at TEXT,
+    last_status_code INTEGER,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    delivered_at TEXT,
+    FOREIGN KEY (config_id) REFERENCES webhook_configs(id)
+);
+CREATE INDEX webhook_deliveries_status_next_attempt ON webhook_deliveries(status, next_attempt_at, id);
+CREATE INDEX webhook_deliveries_config_created ON webhook_deliveries(config_id, created_at);
 """
 
 def _schema_objects(conn: sqlite3.Connection, type_: str) -> dict[str, str]:
@@ -182,7 +236,11 @@ _SQLITE_BUSY = 5
 _SQLITE_LOCKED = 6
 
 
-def _enable_wal(conn: sqlite3.Connection, *, attempts: int = 50, delay: float = 0.1) -> None:
+class _SqlExecutor(Protocol):
+    def execute(self, statement: str, /) -> object: ...
+
+
+def _enable_wal(conn: _SqlExecutor, *, attempts: int = 50, delay: float = 0.1) -> None:
     """Switch to WAL, retrying only on a peer's transient write lock during concurrent cold boot."""
     for remaining in range(attempts, 0, -1):
         try:
@@ -203,6 +261,13 @@ def get_db() -> sqlite3.Connection:
         conn.execute("PRAGMA foreign_keys = ON")
         g.db = conn
     return g.db
+
+def inserted_id(cursor: sqlite3.Cursor) -> int:
+    """Return SQLite's generated row id, failing if no row was inserted."""
+    value = cursor.lastrowid
+    if value is None:
+        raise RuntimeError("database insert did not produce a row id")
+    return value
 
 
 @contextmanager

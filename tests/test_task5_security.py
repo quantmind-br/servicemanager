@@ -15,7 +15,7 @@ from itsdangerous import URLSafeTimedSerializer
 from app import create_app
 from service_manager.crypto import EncryptedValue, account_field_aad, decrypt_secret, hash_password
 from service_manager.audit import append_audit_event, verify_audit_chain
-from service_manager.db import get_db, transaction
+from service_manager.db import get_db, inserted_id, transaction
 
 
 KEY = base64.b64encode(b"a" * 32).decode("ascii")
@@ -53,12 +53,17 @@ def csrf_headers(client, app, *, origin: str = PUBLIC_ORIGIN) -> dict[str, str]:
 def authenticated_operator(app, client, *, role: str = "operador") -> tuple[int, int]:
     with app.app_context():
         conn = get_db()
-        service_id = conn.execute("INSERT INTO services (name) VALUES ('Mail')").lastrowid
-        user_id = conn.execute(
+        service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Mail')"))
+        user_id = inserted_id(conn.execute(
             "INSERT INTO users (username, password_hash, role, is_active, must_change_password, created_at, updated_at) "
             "VALUES (?, ?, ?, 1, 0, ?, ?)",
             (f"fixture-{role}", hash_password("not-a-secret-in-audit"), role, datetime.now(UTC).isoformat(), datetime.now(UTC).isoformat()),
-        ).lastrowid
+        ))
+        if role != "admin":
+            conn.execute(
+                "INSERT INTO service_members (user_id, service_id, role, created_at) VALUES (?, ?, 'service_admin', ?)",
+                (user_id, service_id, datetime.now(UTC).isoformat()),
+            )
         conn.commit()
     with client.session_transaction() as session:
         now = time.time()
@@ -236,6 +241,23 @@ def test_audit_chain_rejects_tampering_and_health_degrades(app):
     assert response.get_json() == {"status": "degraded"}
 
 
+def test_audit_metadata_allows_password_changed_bool_but_rejects_secret_keys(app):
+    import pytest
+
+    with app.app_context():
+        conn = get_db()
+        with transaction(conn):
+            append_audit_event(conn, action="account.updated", target_type="account", target_id="1", metadata={"password_changed": True})
+        stored = conn.execute("SELECT metadata_json FROM audit_events WHERE action='account.updated'").fetchone()[0]
+        assert '"password_changed": true' in stored or '"password_changed":true' in stored
+        with transaction(conn):
+            with pytest.raises(ValueError):
+                append_audit_event(conn, action="bad", target_type="test", metadata={"password_changed": "leaked-secret"})
+        with transaction(conn):
+            with pytest.raises(ValueError):
+                append_audit_event(conn, action="bad", target_type="test", metadata={"password_hint": "x"})
+
+
 def test_expired_security_events_are_removed_during_audit_cleanup(app):
     with app.app_context():
         conn = get_db()
@@ -341,10 +363,10 @@ def test_field_add_always_encrypts_the_value(app, client):
     _, service_id = authenticated_operator(app, client)
     with app.app_context():
         conn = get_db()
-        account_id = conn.execute(
+        account_id = inserted_id(conn.execute(
             "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
             ("public-field@example.test", b"ciphertext", b"0" * 12),
-        ).lastrowid
+        ))
         conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (account_id, service_id))
         conn.commit()
 
@@ -370,10 +392,10 @@ def test_field_update_reencrypts_the_value(app, client):
     _, service_id = authenticated_operator(app, client, role="admin")
     with app.app_context():
         conn = get_db()
-        account_id = conn.execute(
+        account_id = inserted_id(conn.execute(
             "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
             ("update-field@example.test", b"ciphertext", b"0" * 12),
-        ).lastrowid
+        ))
         conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (account_id, service_id))
         conn.commit()
     client.post(
@@ -399,10 +421,10 @@ def test_removed_field_endpoints_return_404(app, client):
     _, service_id = authenticated_operator(app, client, role="admin")
     with app.app_context():
         conn = get_db()
-        account_id = conn.execute(
+        account_id = inserted_id(conn.execute(
             "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
             ("removed@example.test", b"ciphertext", b"0" * 12),
-        ).lastrowid
+        ))
         conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (account_id, service_id))
         conn.commit()
     client.post(
@@ -431,10 +453,10 @@ def test_password_reveal_works_without_recent_reauth(app, client):
         from service_manager.crypto import account_password_aad, encrypt_secret
         conn = get_db()
         envelope = encrypt_secret("account-password", aad=account_password_aad(1))
-        account_id = conn.execute(
+        account_id = inserted_id(conn.execute(
             "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, ?)",
             ("reveal@example.test", envelope.ciphertext, envelope.nonce, envelope.key_version),
-        ).lastrowid
+        ))
         conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (account_id, service_id))
         conn.commit()
         # Re-encrypt bound to the real account id now that it is known.
@@ -444,7 +466,7 @@ def test_password_reveal_works_without_recent_reauth(app, client):
     with client.session_transaction() as session:
         session["reauthenticated_at"] = None
     reveal = client.post(
-        f"/api/accounts/{account_id}/secrets/password/reveal",
+        f"/api/accounts/{account_id}/secrets/password/reveal?service={service_id}",
         headers=csrf_headers(client, app),
     )
     assert reveal.status_code == 200

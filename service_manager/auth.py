@@ -7,21 +7,22 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from functools import wraps
-from typing import Any, ParamSpec, TypeVar
+from typing import Any, ParamSpec
 
 from email_validator import EmailNotValidError, validate_email
 from flask import Blueprint, Flask, Response, abort, current_app, g, jsonify, redirect, render_template, request, session, url_for
+from flask.typing import ResponseReturnValue
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from service_manager.audit import append_audit_event, append_audit_event_in_transaction, verify_audit_chain
 from service_manager.crypto import hash_password, needs_password_rehash, verify_password
-from service_manager.db import get_db, transaction
+from service_manager.db import get_db, inserted_id, transaction
+from service_manager.webhooks import enqueue_webhook_event, record_audit_degraded
 
 
 auth = Blueprint("auth", __name__)
 
 P = ParamSpec("P")
-R = TypeVar("R")
 _INVALID_CREDENTIALS = "Credenciais inválidas"
 _MAX_SECRET_LENGTH = 4096
 _SESSION_KEYS = {"user_id", "role", "session_version", "authenticated_at", "last_seen_at", "reauthenticated_at"}
@@ -85,6 +86,11 @@ def _require_audit_chain() -> None:
     healthy = verify_audit_chain()
     current_app.config["AUDIT_CHAIN_HEALTHY"] = healthy
     if not healthy:
+        try:
+            record_audit_degraded(get_db())
+        except Exception:
+            # Degradation alerting must never mask the 503 it accompanies.
+            pass
         abort(503)
 
 
@@ -101,11 +107,11 @@ def _seed_initial_admin(app: Flask) -> None:
             if not username or not _valid_secret(password) or not password:
                 raise RuntimeError("ADMIN_USERNAME or ADMIN_PASSWORD is invalid")
             stamp = now_text()
-            user_id = conn.execute(
+            user_id = inserted_id(conn.execute(
                 "INSERT INTO users (username, password_hash, role, is_active, must_change_password, created_at, updated_at, password_changed_at) "
                 "VALUES (?, ?, 'admin', 1, 0, ?, ?, ?)",
                 (username, hash_password(password), stamp, stamp, stamp),
-            ).lastrowid
+            ))
             _audit(conn, action="bootstrap.initialized", target_type="user", target_id=user_id)
 
 
@@ -147,6 +153,18 @@ def consume_reveal_allowance(conn: Any, *, user_id: int, ip: str) -> bool:
         "SELECT COUNT(*) FROM security_events WHERE kind='reveal' AND subject=? AND occurred_at>=?", (str(user_id), cutoff)
     ).fetchone()[0]
     if count >= 20:
+        # Over the limit: enqueue once per (user, ip) window using a reveal_blocked marker
+        # that is never counted toward the 20-event limiter.
+        blocked = conn.execute(
+            "SELECT COUNT(*) FROM security_events WHERE kind='reveal_blocked' AND subject=? AND source_ip=? AND occurred_at>=?",
+            (str(user_id), ip, cutoff),
+        ).fetchone()[0]
+        if blocked == 0:
+            conn.execute(
+                "INSERT INTO security_events (kind, subject, source_ip, occurred_at) VALUES ('reveal_blocked', ?, ?, ?)",
+                (str(user_id), ip, now_text()),
+            )
+            enqueue_webhook_event(conn, "reveal_rate_limit", {"source_ip": ip, "actor_user_id": user_id})
         return False
     conn.execute(
         "INSERT INTO security_events (kind, subject, source_ip, occurred_at) VALUES ('reveal', ?, ?, ?)",
@@ -158,6 +176,21 @@ def consume_reveal_allowance(conn: Any, *, user_id: int, ip: str) -> bool:
 def _authentication_failure(conn: Any, *, username: str, ip: str) -> Response:
     _record_login_failure(conn, username=username, ip=ip)
     _audit(conn, action="login_failure", target_type="user", metadata={"username_present": bool(username)})
+    # Recompute counts after inserting this failure; enqueue when either crosses exactly 5.
+    cutoff_ip = (now_utc() - timedelta(minutes=1)).isoformat()
+    cutoff_username = (now_utc() - timedelta(minutes=15)).isoformat()
+    ip_count = conn.execute(
+        "SELECT COUNT(*) FROM security_events WHERE kind='login_failure' AND source_ip=? AND occurred_at>=?", (ip, cutoff_ip)
+    ).fetchone()[0]
+    username_count = conn.execute(
+        "SELECT COUNT(*) FROM security_events WHERE kind='login_failure' AND subject=? AND occurred_at>=?", (username, cutoff_username)
+    ).fetchone()[0]
+    if ip_count == 5 or username_count == 5:
+        enqueue_webhook_event(
+            conn,
+            "login_failures",
+            {"source_ip": ip, "username_present": bool(username), "ip_count": ip_count, "username_count": username_count},
+        )
     return Response(_INVALID_CREDENTIALS, status=401)
 
 
@@ -173,6 +206,8 @@ def _authenticate(username: str, password: str, *, require_active: bool = True) 
         if needs_password_rehash(user["password_hash"]):
             conn.execute("UPDATE users SET password_hash=?, updated_at=? WHERE id=?", (hash_password(password), now_text(), user["id"]))
             user = conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
+            if user is None:
+                raise RuntimeError("authenticated user disappeared after password rehash")
         _audit(conn, action="login.succeeded", target_type="user", target_id=user["id"], actor_user_id=user["id"])
         return user, None
 
@@ -195,7 +230,7 @@ def _render_auth_failure(template: str, response: Response, **context: Any) -> R
 
 
 @auth.route("/login", methods=["GET", "POST"])
-def login() -> Response:
+def login() -> ResponseReturnValue:
     if request.method == "GET":
         return Response(render_template("login.html"), headers={"Cache-Control": "no-store, private"})
     username = normalize_username(request.form.get("username"))
@@ -209,12 +244,14 @@ def login() -> Response:
     user, error = _authenticate(username, password)
     if error is not None:
         return _render_auth_failure("login.html", error)
+    if user is None:
+        raise RuntimeError("authentication succeeded without a user")
     _set_session(user)
     return redirect(url_for("auth.account" if user["must_change_password"] else "routes.index"))
 
 
 @auth.post("/logout")
-def logout() -> Response:
+def logout() -> ResponseReturnValue:
     user = getattr(g, "current_user", None)
     if user is not None:
         append_audit_event_in_transaction(action="logout", target_type="user", target_id=user["id"], actor_user_id=user["id"])
@@ -262,7 +299,7 @@ def bind_auth(app: Flask) -> None:
             _require_audit_chain()
 
     @app.before_request
-    def authenticate_protected_requests() -> Response | None:
+    def authenticate_protected_requests() -> ResponseReturnValue | None:
         if request.endpoint is None or request.endpoint in {"routes.healthz", "auth.login", "static"}:
             return None
         user = _session_user()
@@ -282,22 +319,27 @@ def bind_auth(app: Flask) -> None:
         return response
 
 
-def require_role(*roles: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
-    def decorator(view: Callable[P, R]) -> Callable[P, R]:
+def require_role(*roles: str) -> Callable[[Callable[P, ResponseReturnValue]], Callable[P, ResponseReturnValue]]:
+    def decorator(view: Callable[P, ResponseReturnValue]) -> Callable[P, ResponseReturnValue]:
         @wraps(view)
-        def wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
+        def wrapped(*args: P.args, **kwargs: P.kwargs) -> ResponseReturnValue:
             user = getattr(g, "current_user", None)
             if user is None:
-                return redirect(url_for("auth.login"))  # type: ignore[return-value]
+                return redirect(url_for("auth.login"))
             if user["role"] not in roles:
+                from service_manager.authorization import _record_authorization_denial
+
                 _require_audit_chain()
-                append_audit_event_in_transaction(
-                    action="authorization.failed",
-                    target_type="endpoint",
-                    target_id=request.endpoint or request.path,
-                    actor_user_id=user["id"],
-                    metadata={"method": request.method},
-                )
+                conn = get_db()
+                with transaction(conn):
+                    _record_authorization_denial(
+                        conn,
+                        user_id=user["id"],
+                        target_type="endpoint",
+                        target_id=request.endpoint or request.path,
+                        service_id=None,
+                        required_role=",".join(roles),
+                    )
                 abort(403)
             return view(*args, **kwargs)
 
@@ -321,7 +363,7 @@ def reauth_page() -> Response:
 
 
 @auth.post("/reauth")
-def reauth() -> Response:
+def reauth() -> ResponseReturnValue:
     user = getattr(g, "current_user", None)
     if user is None:
         return redirect(url_for("auth.login"))
@@ -347,7 +389,7 @@ def account() -> Response:
 
 
 @auth.post("/account/username")
-def change_username() -> Response:
+def change_username() -> ResponseReturnValue:
     user = getattr(g, "current_user", None)
     assert user is not None
     username = normalize_username(request.form.get("username"))
@@ -367,12 +409,14 @@ def change_username() -> Response:
     except sqlite3.IntegrityError:
         return Response(render_template("account.html", user=user, error_username="Este login já está em uso."), status=409, headers={"Cache-Control": "no-store, private"})
     refreshed = conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
+    if refreshed is None:
+        raise RuntimeError("updated user could not be reloaded")
     _set_session(refreshed, reauthenticated=True)
     return redirect(url_for("auth.account"), code=303)
 
 
 @auth.post("/account/password")
-def change_password() -> Response:
+def change_password() -> ResponseReturnValue:
     user = getattr(g, "current_user", None)
     assert user is not None
     current_password = request.form.get("current_password", "")
@@ -391,6 +435,8 @@ def change_password() -> Response:
         )
         _audit(conn, action="password.changed", target_type="user", target_id=current["id"], actor_user_id=current["id"])
     refreshed = conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
+    if refreshed is None:
+        raise RuntimeError("updated user could not be reloaded")
     _set_session(refreshed, reauthenticated=True)
     return redirect(url_for("auth.account"), code=303)
 
@@ -398,8 +444,13 @@ def change_password() -> Response:
 @auth.get("/admin/users")
 @require_role("admin")
 def users() -> Response:
-    rows = get_db().execute("SELECT id, username, role, is_active, must_change_password FROM users ORDER BY username").fetchall()
-    return Response(render_template("admin_users.html", users=rows), headers={"Cache-Control": "no-store, private"})
+    conn = get_db()
+    rows = conn.execute("SELECT id, username, role, is_active, must_change_password FROM users ORDER BY username").fetchall()
+    counts = {
+        row["user_id"]: row["n"]
+        for row in conn.execute("SELECT user_id, COUNT(*) AS n FROM service_members GROUP BY user_id")
+    }
+    return Response(render_template("admin_users.html", users=rows, membership_counts=counts), headers={"Cache-Control": "no-store, private"})
 
 
 def _request_value(name: str) -> Any:
@@ -409,7 +460,7 @@ def _request_value(name: str) -> Any:
 
 @auth.post("/admin/users")
 @require_role("admin")
-def create_user() -> Response:
+def create_user() -> ResponseReturnValue:
     require_recent_reauth()
     username = normalize_username(_request_value("username"))
     role = _request_value("role") or ""
@@ -420,11 +471,11 @@ def create_user() -> Response:
     try:
         with transaction(conn):
             stamp = now_text()
-            user_id = conn.execute(
+            user_id = inserted_id(conn.execute(
                 "INSERT INTO users (username,password_hash,role,is_active,must_change_password,created_at,updated_at,password_changed_at) "
                 "VALUES (?, ?, ?, 1, 1, ?, ?, ?)",
                 (username, hash_password(temporary_password), role, stamp, stamp, stamp),
-            ).lastrowid
+            ))
             _audit(conn, action="user.created", target_type="user", target_id=user_id, actor_user_id=g.current_user["id"], metadata={"role": role})
     except sqlite3.IntegrityError:
         return Response("Login indisponível", status=409)
@@ -441,7 +492,7 @@ def _last_admin_change_would_break(conn: Any, target: Any, *, role: str | None =
 
 @auth.post("/admin/users/<int:user_id>/role")
 @require_role("admin")
-def change_role(user_id: int) -> Response:
+def change_role(user_id: int) -> ResponseReturnValue:
     require_recent_reauth()
     role = request.form.get("role", "")
     if role not in {"admin", "operador"}:
@@ -453,14 +504,28 @@ def change_role(user_id: int) -> Response:
             abort(404)
         if _last_admin_change_would_break(conn, target, role=role):
             return Response("Último administrador ativo", status=400)
+        if target["role"] == role:
+            return Response(status=204)
+        if role == "admin":
+            # Global bypass supersedes any per-service memberships.
+            conn.execute("DELETE FROM service_members WHERE user_id=?", (user_id,))
+            membership_count = 0
+        else:
+            # Preserve pre-demotion reach: service_admin on every existing service.
+            conn.execute(
+                "INSERT INTO service_members (user_id, service_id, role, created_at) "
+                "SELECT ?, id, 'service_admin', ? FROM services",
+                (user_id, now_text()),
+            )
+            membership_count = conn.execute("SELECT COUNT(*) FROM service_members WHERE user_id=?", (user_id,)).fetchone()[0]
         conn.execute("UPDATE users SET role=?, session_version=session_version+1, updated_at=? WHERE id=?", (role, now_text(), user_id))
-        _audit(conn, action="user.role_changed", target_type="user", target_id=user_id, actor_user_id=g.current_user["id"], metadata={"role": role})
+        _audit(conn, action="user.role_changed", target_type="user", target_id=user_id, actor_user_id=g.current_user["id"], metadata={"role": role, "membership_count": membership_count})
     return Response(status=204)
 
 
 @auth.post("/admin/users/<int:user_id>/active")
 @require_role("admin")
-def change_active(user_id: int) -> Response:
+def change_active(user_id: int) -> ResponseReturnValue:
     require_recent_reauth()
     active = request.form.get("is_active") in {"1", "true", "on"}
     conn = get_db()
@@ -472,4 +537,7 @@ def change_active(user_id: int) -> Response:
             return Response("Último administrador ativo", status=400)
         conn.execute("UPDATE users SET is_active=?, session_version=session_version+1, updated_at=? WHERE id=?", (int(active), now_text(), user_id))
         _audit(conn, action="user.active_changed", target_type="user", target_id=user_id, actor_user_id=g.current_user["id"], metadata={"active": active})
+        if target["is_active"] and not active:
+            # Only on a true->false transition.
+            enqueue_webhook_event(conn, "user_deactivated", {"actor_user_id": g.current_user["id"], "target_user_id": user_id})
     return Response(status=204)

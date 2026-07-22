@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import create_app
 import app as app_module
-from service_manager.db import get_db
+from service_manager.db import get_db, inserted_id
 from service_manager.crypto import EncryptedValue, account_field_aad, account_password_aad, decrypt_secret, encrypt_secret, hash_password
 from service_manager.imports import parse_import_file
 
@@ -31,11 +31,11 @@ def csrf_headers(client, app) -> dict[str, str]:
 def authenticate(client, app, *, role: str = "admin") -> int:
     with app.app_context():
         now = datetime.now(UTC).isoformat()
-        user_id = get_db().execute(
+        user_id = inserted_id(get_db().execute(
             "INSERT INTO users (username, password_hash, role, is_active, must_change_password, created_at, updated_at) "
             "VALUES (?, ?, ?, 1, 0, ?, ?)",
             (f"fixture-{role}", hash_password("foundation-test-password"), role, now, now),
-        ).lastrowid
+        ))
         get_db().commit()
     with client.session_transaction() as session:
         now = time.time()
@@ -66,11 +66,11 @@ def client(app):
 def seed_account(app, *, password: str, field_value: str) -> int:
     with app.app_context():
         conn = get_db()
-        service_id = conn.execute("INSERT INTO services (name) VALUES ('Email')").lastrowid
-        account_id = conn.execute(
+        service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Email')"))
+        account_id = inserted_id(conn.execute(
             "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, ?)",
             ("person@example.test", b"", b"0" * 12, 1),
-        ).lastrowid
+        ))
         password_value = encrypt_secret(password, aad=account_password_aad(account_id))
         conn.execute(
             "UPDATE accounts SET password_ciphertext = ?, password_nonce = ?, password_key_version = ? WHERE id = ?",
@@ -80,10 +80,10 @@ def seed_account(app, *, password: str, field_value: str) -> int:
             "INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')",
             (account_id, service_id),
         )
-        field_id = conn.execute(
+        field_id = inserted_id(conn.execute(
             "INSERT INTO custom_fields (service_id, name) VALUES (?, 'Recovery code')",
             (service_id,),
-        ).lastrowid
+        ))
         field_value_envelope = encrypt_secret(field_value, aad=account_field_aad(account_id, field_id))
         conn.execute(
             "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?)",

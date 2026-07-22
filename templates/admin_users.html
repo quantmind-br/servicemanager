@@ -15,7 +15,7 @@
   <div class="table-wrap">
     <table class="admin-users-table">
       <thead>
-        <tr><th scope="col">Login</th><th scope="col">Papel</th><th scope="col">Ativo</th><th scope="col">Troca de senha pendente</th><th scope="col">Ações</th></tr>
+        <tr><th scope="col">Login</th><th scope="col">Papel</th><th scope="col">Ativo</th><th scope="col">Acessos</th><th scope="col">Troca de senha pendente</th><th scope="col">Ações</th></tr>
       </thead>
       <tbody>
         {% for u in users %}
@@ -34,6 +34,7 @@
               <span class="toggle-track"><span class="toggle-thumb"></span></span>
             </label>
           </td>
+          <td>{% if u['role'] == 'admin' %}<span class="muted-hint">acesso global</span>{% else %}<a href="{{ url_for('routes.service_access') }}">{{ membership_counts.get(u['id'], 0) }} serviço(s)</a>{% endif %}</td>
           <td>{{ "Sim" if u['must_change_password'] else "Não" }}</td>
           <td class="muted-hint">{% if is_self %}Protegido nesta tela{% else %}Alterações salvas automaticamente{% endif %}</td>
         </tr>

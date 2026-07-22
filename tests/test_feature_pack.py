@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import base64
+import io
+import json
 from pathlib import Path
+import re
 import sys
+import time
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import create_app
-from service_manager.db import get_db
+from service_manager.db import get_db, inserted_id, transaction
+from service_manager.audit import append_audit_event
 from service_manager.crypto import account_field_aad, account_password_aad, encrypt_secret
 
 
@@ -59,6 +64,87 @@ def login_operator(app, client) -> None:
     assert response.status_code == 302
 
 
+from datetime import date
+from service_manager.routes import _parse_rotation_days, _parse_rotation_due_at, _rotation_state
+
+
+def test_parse_rotation_days_semantics():
+    # Absent/blank -> inherit/clear.
+    assert _parse_rotation_days(None) == (True, None)
+    assert _parse_rotation_days("") == (True, None)
+    assert _parse_rotation_days("   ") == (True, None)
+    # Valid ASCII decimals within range.
+    assert _parse_rotation_days("1") == (True, 1)
+    assert _parse_rotation_days("90") == (True, 90)
+    assert _parse_rotation_days("3650") == (True, 3650)
+    assert _parse_rotation_days(" 30 ") == (False, None)  # Whitespace-wrapped non-blank is invalid.
+    # Out of range and non-ASCII-decimal inputs are invalid.
+    assert _parse_rotation_days("0") == (False, None)
+    assert _parse_rotation_days("3651") == (False, None)
+    assert _parse_rotation_days("-5") == (False, None)
+    assert _parse_rotation_days("12.5") == (False, None)
+    assert _parse_rotation_days("abc") == (False, None)
+    assert _parse_rotation_days("٩") == (False, None)  # Arabic-Indic digit rejected.
+    assert _parse_rotation_days("1_0") == (False, None)
+
+
+def test_parse_rotation_due_at_requires_exact_canonical_iso():
+    assert _parse_rotation_due_at(None) == (True, None)
+    assert _parse_rotation_due_at("") == (True, None)
+    assert _parse_rotation_due_at("2026-07-22") == (True, "2026-07-22")
+    assert _parse_rotation_due_at(" 2026-07-22 ") == (False, None)  # Whitespace-wrapped non-blank is invalid.
+    # Non-canonical or malformed inputs rejected.
+    assert _parse_rotation_due_at("2026-7-2") == (False, None)
+    assert _parse_rotation_due_at("2026/07/22") == (False, None)
+    assert _parse_rotation_due_at("22-07-2026") == (False, None)
+    assert _parse_rotation_due_at("2026-13-01") == (False, None)
+    assert _parse_rotation_due_at("not-a-date") == (False, None)
+
+
+def test_rotation_state_unknown_and_no_policy():
+    today = date(2026, 7, 22)
+    # Absent password timestamp with no policy -> unknown (existing accounts).
+    assert _rotation_state(None, None, None, None, today=today)["state"] == "unknown"
+    # Absent password timestamp even with a policy -> unknown.
+    assert _rotation_state(None, 30, None, None, today=today)["state"] == "unknown"
+    # Malformed / naive timestamps fail closed to unknown.
+    assert _rotation_state("not-a-timestamp", None, None, 30, today=today)["state"] == "unknown"
+    assert _rotation_state("2026-07-01T00:00:00", None, None, 30, today=today)["state"] == "unknown"
+    # Valid tz-aware timestamp but no effective policy -> no_policy.
+    result = _rotation_state("2026-07-01T00:00:00+00:00", None, None, None, today=today)
+    assert result["state"] == "no_policy"
+    assert result["due_at"] is None and result["days_remaining"] is None
+
+
+def test_rotation_state_precedence_and_boundaries():
+    today = date(2026, 7, 22)
+    # Explicit due-date override wins even when password history is unknown.
+    overdue = _rotation_state(None, None, "2026-07-20", 30, today=today)
+    assert overdue["state"] == "overdue" and overdue["days_remaining"] == -2
+    # Account-level days override the service default.
+    result = _rotation_state("2026-07-01T00:00:00+00:00", 10, None, 365, today=today)
+    assert result["effective_days"] == 10 and result["due_at"] == "2026-07-11"
+    assert result["state"] == "overdue"
+    # Service default applies when account days is NULL.
+    svc = _rotation_state("2026-07-01T00:00:00+00:00", None, None, 30, today=today)
+    assert svc["effective_days"] == 30 and svc["due_at"] == "2026-07-31"
+    # Seven-day boundary: exactly 7 days remaining is due_soon; 8 is current.
+    due_soon = _rotation_state("2026-07-01T00:00:00+00:00", None, None, 28, today=today)  # due 2026-07-29 -> 7 days
+    assert due_soon["days_remaining"] == 7 and due_soon["state"] == "due_soon"
+    current = _rotation_state("2026-07-01T00:00:00+00:00", None, None, 29, today=today)  # due 2026-07-30 -> 8 days
+    assert current["days_remaining"] == 8 and current["state"] == "current"
+    # Zero days remaining (due today) is due_soon, not overdue.
+    zero = _rotation_state(None, None, "2026-07-22", None, today=today)
+    assert zero["days_remaining"] == 0 and zero["state"] == "due_soon"
+    # days_remaining == -1 is the immediate overdue threshold.
+    minus_one = _rotation_state(None, None, "2026-07-21", None, today=today)
+    assert minus_one["days_remaining"] == -1 and minus_one["state"] == "overdue"
+    # A malformed explicit due override fails closed to unknown.
+    assert _rotation_state("2026-07-01T00:00:00+00:00", None, "2026-13-40", 30, today=today)["state"] == "unknown"
+    # Non-UTC tz-aware timestamps normalize to UTC date before adding the interval.
+    tz = _rotation_state("2026-06-30T23:00:00-05:00", None, None, 30, today=today)  # = 2026-07-01T04:00Z
+    assert tz["due_at"] == "2026-07-31"
+
 def test_admin_users_renders_management_page(client):
     login_admin(client)
 
@@ -107,14 +193,31 @@ def test_index_renders_url_state_hooks(client):
 
     assert "data-row-select" in body
 
+
+def test_index_renders_bulk_field_and_typed_delete_hooks(app, client):
+    login_admin(client)
+    service_id, account_ids, _ = seed_bulk_data(app)
+    with app.app_context():
+        conn = get_db()
+        conn.execute("INSERT INTO custom_fields (service_id, name) VALUES (?, 'PIN')", (service_id,))
+        conn.commit()
+
+    body = client.get(f"/?service={service_id}").get_data(as_text=True)
+
+    assert 'id="bulk-field-id"' in body
+    assert 'id="bulk-field-value"' in body
+    assert 'id="bulk-apply-field"' in body
+    assert 'id="delete-confirm-dialog"' in body
+    assert 'id="delete-confirm-input"' in body
+
 def seed_export_data(app) -> int:
     with app.app_context():
         conn = get_db()
-        service_id = conn.execute("INSERT INTO services (name) VALUES ('Export')").lastrowid
-        account_id = conn.execute(
+        service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Export')"))
+        account_id = inserted_id(conn.execute(
             "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
             ("=formula@example.test", b"", b"0" * 12),
-        ).lastrowid
+        ))
         password = encrypt_secret("clear-password-must-not-export", aad=account_password_aad(account_id))
         conn.execute(
             "UPDATE accounts SET password_ciphertext=?, password_nonce=? WHERE id=?",
@@ -124,7 +227,7 @@ def seed_export_data(app) -> int:
             "INSERT INTO account_service (account_id, service_id, status, registered) VALUES (?, ?, 'ativo', 1)",
             (account_id, service_id),
         )
-        field_id = conn.execute("INSERT INTO custom_fields (service_id, name) VALUES (?, 'API key')", (service_id,)).lastrowid
+        field_id = inserted_id(conn.execute("INSERT INTO custom_fields (service_id, name) VALUES (?, 'API key')", (service_id,)))
         field = encrypt_secret("clear-field-must-not-export", aad=account_field_aad(account_id, field_id))
         conn.execute(
             "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, 1)",
@@ -168,23 +271,71 @@ def test_safe_exports_require_admin(app, client):
     assert client.get(f"/export.xlsx?service={service_id}").status_code == 403
 
 
+def test_export_filename_slugs_name_with_id_and_utc_timestamp(app, client):
+    login_admin(client)
+    with app.app_context():
+        conn = get_db()
+        service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Serviço Especial!!')"))
+        conn.commit()
+
+    csv_resp = client.get(f"/export.csv?service={service_id}")
+    xlsx_resp = client.get(f"/export.xlsx?service={service_id}")
+
+    import re as _re
+    for resp, ext in ((csv_resp, "csv"), (xlsx_resp, "xlsx")):
+        disp = resp.headers["Content-Disposition"]
+        assert _re.search(rf"filename=contas_servico_especial_{service_id}_\d{{8}}T\d{{6}}Z\.{ext}", disp), disp
+
+
+def test_export_rejects_over_ten_thousand_without_audit(app, client):
+    login_admin(client)
+    with app.app_context():
+        conn = get_db()
+        service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Big')"))
+        conn.executemany(
+            "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
+            [(f"user{n}@x.test", b"", b"0" * 12) for n in range(10001)],
+        )
+        conn.execute(
+            "INSERT INTO account_service (account_id, service_id, status, registered) SELECT id, ?, 'nunca', 0 FROM accounts",
+            (service_id,),
+        )
+        conn.commit()
+
+    over = client.get(f"/export.csv?service={service_id}")
+    assert over.status_code == 413
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) FROM audit_events WHERE action='accounts.exported'").fetchone()[0] == 0
+
+    with app.app_context():
+        conn = get_db()
+        victim = conn.execute("SELECT id FROM accounts ORDER BY id DESC LIMIT 1").fetchone()["id"]
+        conn.execute("DELETE FROM account_service WHERE account_id=?", (victim,))
+        conn.commit()
+    exact = client.get(f"/export.csv?service={service_id}")
+    assert exact.status_code == 200
+    assert exact.get_data(as_text=True).count("\n") >= 10000
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) FROM audit_events WHERE action='accounts.exported'").fetchone()[0] == 1
+
+
 def seed_bulk_data(app) -> tuple[int, list[int], int]:
     with app.app_context():
         conn = get_db()
-        service_id = conn.execute("INSERT INTO services (name) VALUES ('Bulk')").lastrowid
-        other_service_id = conn.execute("INSERT INTO services (name) VALUES ('Other')").lastrowid
-        account_ids = []
+        service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Bulk')"))
+        other_service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Other')"))
+        account_ids: list[int] = []
         for email in ("bulk-one@example.test", "bulk-two@example.test"):
-            account_id = conn.execute(
+            account_id = inserted_id(conn.execute(
                 "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
                 (email, b"x", b"0" * 12),
-            ).lastrowid
+            ))
             conn.execute("INSERT INTO account_service (account_id, service_id, status, registered) VALUES (?, ?, 'nunca', 0)", (account_id, service_id))
             account_ids.append(account_id)
-        foreign_id = conn.execute(
+        foreign_id = inserted_id(conn.execute(
             "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES ('foreign@example.test', ?, ?, 1)",
             (b"x", b"0" * 12),
-        ).lastrowid
+        ))
         conn.execute("INSERT INTO account_service (account_id, service_id, status, registered) VALUES (?, ?, 'nunca', 0)", (foreign_id, other_service_id))
         conn.commit()
         return service_id, account_ids, foreign_id
@@ -216,11 +367,11 @@ def test_bulk_rejects_foreign_account_and_over_limit(app, client):
 def test_bulk_delete_requires_admin_and_removes_accounts(app, client):
     service_id, account_ids, _ = seed_bulk_data(app)
     login_operator(app, client)
-    assert client.post("/accounts/bulk/delete", data={"service_id": service_id, "account_ids": account_ids}).status_code == 403
+    assert client.post("/accounts/bulk/delete", data={"service_id": service_id, "account_ids": account_ids, "confirmation_count": str(len(account_ids))}).status_code == 403
     client.post("/logout")
     login_admin(client)
 
-    response = client.post("/accounts/bulk/delete", data={"service_id": service_id, "account_ids": account_ids})
+    response = client.post("/accounts/bulk/delete", data={"service_id": service_id, "account_ids": account_ids, "confirmation_count": str(len(account_ids))})
 
     assert response.status_code == 302
     assert "ok=bulk_deleted" in response.headers["Location"]
@@ -230,8 +381,69 @@ def test_bulk_delete_requires_admin_and_removes_accounts(app, client):
         assert conn.execute("SELECT COUNT(*) FROM audit_events WHERE action='accounts.bulk_deleted'").fetchone()[0] == 1
 
 
+
+def test_bulk_delete_requires_matching_confirmation_count(app, client):
+    service_id, account_ids, _ = seed_bulk_data(app)
+    login_admin(client)
+
+    absent = client.post("/accounts/bulk/delete", data={"service_id": service_id, "account_ids": account_ids})
+    mismatch = client.post("/accounts/bulk/delete", data={"service_id": service_id, "account_ids": account_ids, "confirmation_count": "1"})
+
+    assert absent.status_code == 400
+    assert mismatch.status_code == 400
+    with app.app_context():
+        conn = get_db()
+        assert conn.execute("SELECT COUNT(*) FROM accounts WHERE id IN (?, ?)", account_ids).fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM audit_events WHERE action='accounts.bulk_deleted'").fetchone()[0] == 0
+
+
+def test_bulk_field_encrypts_value_on_selected_accounts(app, client):
+    login_admin(client)
+    service_id, account_ids, foreign_id = seed_bulk_data(app)
+    with app.app_context():
+        conn = get_db()
+        field_id = inserted_id(conn.execute("INSERT INTO custom_fields (service_id, name) VALUES (?, 'PIN')", (service_id,)))
+        conn.commit()
+
+    response = client.post(
+        "/accounts/bulk/field",
+        data={"service_id": service_id, "account_ids": account_ids, "field_id": field_id, "field_value": "1234-secret"},
+    )
+
+    assert response.status_code == 302
+    with app.app_context():
+        conn = get_db()
+        from service_manager.crypto import account_field_aad, decrypt_secret, EncryptedValue
+        rows = conn.execute("SELECT account_id, value_ciphertext, value_nonce, value_key_version FROM field_values WHERE field_id=? ORDER BY account_id", (field_id,)).fetchall()
+        assert [r["account_id"] for r in rows] == sorted(account_ids)
+        for r in rows:
+            assert decrypt_secret(EncryptedValue(r["value_ciphertext"], r["value_nonce"], r["value_key_version"]), aad=account_field_aad(r["account_id"], field_id)) == "1234-secret"
+        event = conn.execute("SELECT metadata_json FROM audit_events WHERE action='accounts.bulk_field' ORDER BY id DESC LIMIT 1").fetchone()
+        assert "1234-secret" not in event["metadata_json"]
+        assert '"count":2' in event["metadata_json"] or '"count": 2' in event["metadata_json"]
+
+
+def test_bulk_field_rejects_foreign_field_blank_and_oversized(app, client):
+    login_admin(client)
+    service_id, account_ids, _ = seed_bulk_data(app)
+    with app.app_context():
+        conn = get_db()
+        other_field = inserted_id(conn.execute("INSERT INTO custom_fields (service_id, name) VALUES ((SELECT id FROM services WHERE name='Other'), 'X')"))
+        service_field = inserted_id(conn.execute("INSERT INTO custom_fields (service_id, name) VALUES (?, 'Y')", (service_id,)))
+        conn.commit()
+
+    foreign = client.post("/accounts/bulk/field", data={"service_id": service_id, "account_ids": account_ids, "field_id": other_field, "field_value": "v"})
+    blank = client.post("/accounts/bulk/field", data={"service_id": service_id, "account_ids": account_ids, "field_id": service_field, "field_value": ""})
+    oversized = client.post("/accounts/bulk/field", data={"service_id": service_id, "account_ids": account_ids, "field_id": service_field, "field_value": "x" * 4097})
+
+    assert foreign.status_code == 404
+    assert blank.status_code == 400
+    assert oversized.status_code == 400
+
 def test_audit_view_filters_exports_and_requires_admin(app, client):
     login_admin(client)
+    with client.session_transaction() as session:
+        session["reauthenticated_at"] = time.time()
     service_id, account_ids, _ = seed_bulk_data(app)
     client.post("/accounts/bulk/status", data={"service_id": service_id, "account_ids": account_ids, "status": "ativo"})
 
@@ -255,9 +467,103 @@ def test_audit_view_filters_exports_and_requires_admin(app, client):
     assert client.get("/admin/audit.csv").status_code == 403
 
 
+def test_audit_requires_recent_reauth_and_ip_hash_controls(app, client):
+    login_admin(client)
+    service_id, account_ids, _ = seed_bulk_data(app)
+    client.post("/accounts/bulk/status", data={"service_id": service_id, "account_ids": account_ids, "status": "ativo"})
+
+    # No recent reauth -> both view and export are 403.
+    with client.session_transaction() as session:
+        session["reauthenticated_at"] = None
+    assert client.get("/admin/audit").status_code == 403
+    assert client.get("/admin/audit.csv").status_code == 403
+
+    # Real reauth flow restores access: POST /reauth returns 204, then view succeeds.
+    reauth = client.post("/reauth", data={"password": ADMIN_PASSWORD})
+    assert reauth.status_code == 204
+    assert client.get("/admin/audit").status_code == 200
+
+    # Literal partial IP filter: matching value keeps rows, non-matching empties them.
+    matched = client.get("/admin/audit?source_ip=127").get_data(as_text=True)
+    assert "accounts.bulk_status" in matched
+    missing = client.get("/admin/audit?source_ip=203.0.113.9").get_data(as_text=True)
+    assert "accounts.bulk_status" not in missing
+
+    # LIKE wildcard input is treated literally (no injection): '%' matches nothing literal.
+    wildcard = client.get("/admin/audit?source_ip=%25").get_data(as_text=True)
+    assert "accounts.bulk_status" not in wildcard
+
+    # Filter survives on the export link in rendered HTML.
+    page = client.get("/admin/audit?source_ip=127").get_data(as_text=True)
+    assert "source_ip=127" in page
+
+    # IP filter applies identically to CSV export: match keeps rows, miss/literal-wildcard empty them.
+    csv_match = client.get("/admin/audit.csv?source_ip=127").get_data(as_text=True)
+    assert "accounts.bulk_status" in csv_match
+    csv_miss = client.get("/admin/audit.csv?source_ip=203.0.113.9").get_data(as_text=True)
+    assert "accounts.bulk_status" not in csv_miss
+    csv_wildcard = client.get("/admin/audit.csv?source_ip=%25").get_data(as_text=True)
+    assert "accounts.bulk_status" not in csv_wildcard
+
+    # CSV includes hash columns as lowercase 64-char hex matching the DB rows.
+    exported = client.get("/admin/audit.csv").get_data(as_text=True)
+    header = exported.splitlines()[0]
+    assert header.endswith("source_ip,previous_hash,event_hash")
+    with app.app_context():
+        row = get_db().execute("SELECT previous_hash, event_hash FROM audit_events ORDER BY id DESC LIMIT 1").fetchone()
+    prev_hex = row["previous_hash"].hex()
+    event_hex = row["event_hash"].hex()
+    assert prev_hex == prev_hex.lower() and len(prev_hex) == 64
+    assert len(event_hex) == 64
+    assert prev_hex in exported and event_hex in exported
+
+    # Operator is denied even with a recent reauth (role gate precedes reauth window).
+    client.post("/logout")
+    login_operator(app, client)
+    with client.session_transaction() as session:
+        session["reauthenticated_at"] = time.time()
+    assert client.get("/admin/audit").status_code == 403
+    assert client.get("/admin/audit.csv").status_code == 403
+
+
+def test_audit_pagination_links_preserve_ip_filter(app, client):
+    login_admin(client)
+    with client.session_transaction() as session:
+        session["reauthenticated_at"] = time.time()
+    # Seed >50 events sharing a source IP so both pagination directions render.
+    with app.app_context():
+        conn = get_db()
+        with transaction(conn):
+            for i in range(120):
+                append_audit_event(
+                    conn,
+                    action="probe.seeded",
+                    target_type="probe",
+                    target_id=i,
+                    source_ip="198.51.100.7",
+                )
+
+    page2 = client.get("/admin/audit?source_ip=198.51.100.7&page=2").get_data(as_text=True)
+    # The pagination anchors themselves must carry both page target and the IP filter,
+    # not merely the form/export links.
+    prev_href = re.search(r'href="([^"]*page=1[^"]*)"[^>]*>Anterior', page2)
+    next_href = re.search(r'href="([^"]*page=3[^"]*)"[^>]*>Próxima', page2)
+    assert prev_href and "source_ip=198.51.100.7" in prev_href.group(1)
+    assert next_href and "source_ip=198.51.100.7" in next_href.group(1)
+    assert "probe.seeded" in page2
+
+
 def test_coverage_matrix_renders_for_authenticated_user(app, client):
     service_id, account_ids, _ = seed_bulk_data(app)
     login_operator(app, client)
+    with app.app_context():
+        conn = get_db()
+        user_id = conn.execute("SELECT id FROM users WHERE username='operator'").fetchone()["id"]
+        conn.execute(
+            "INSERT INTO service_members (user_id, service_id, role, created_at) VALUES (?, ?, 'viewer', '2026-01-01T00:00:00+00:00')",
+            (user_id, service_id),
+        )
+        conn.commit()
 
     response = client.get("/coverage")
 
@@ -267,6 +573,77 @@ def test_coverage_matrix_renders_for_authenticated_user(app, client):
     assert "bulk-one@example.test" in body
     assert f"/?service={service_id}#row-{account_ids[0]}" in body
     assert 'id="coverage-filter"' in body
+    # Missing-registration data attributes are emitted for every visible service.
+    assert f'data-reg-svc-{service_id}="0"' in body
+    assert "coverage-service-filter" in body
+    assert 'data-coverage-service' in body
+    assert "missing-registration" in body
+
+
+def test_coverage_emits_full_case_matrix_data(app, client):
+    login_admin(client)
+    with app.app_context():
+        conn = get_db()
+        alpha = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Alpha')"))
+        beta = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Beta')"))
+
+        def make_account(email: str) -> int:
+            return inserted_id(conn.execute(
+                "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
+                (email, b"x", b"0" * 12),
+            ))
+
+        def link(account_id: int, service_id: int, status: str, registered: int) -> None:
+            conn.execute(
+                "INSERT INTO account_service (account_id, service_id, status, registered) VALUES (?, ?, ?, ?)",
+                (account_id, service_id, status, registered),
+            )
+
+        # all-registered: registered in both services.
+        full = make_account("full@example.test")
+        link(full, alpha, "ativo", 1)
+        link(full, beta, "ativo", 1)
+        # one-gap: registered in alpha, linked-but-unregistered in beta.
+        gap = make_account("gap@example.test")
+        link(gap, alpha, "ativo", 1)
+        link(gap, beta, "nunca", 0)
+        # no-link: linked only to alpha (beta cell must be synthesized as 0).
+        nolink = make_account("nolink@example.test")
+        link(nolink, alpha, "ativo", 1)
+        # no-registration: linked to both but registered in neither.
+        none_reg = make_account("nonereg@example.test")
+        link(none_reg, alpha, "nunca", 0)
+        link(none_reg, beta, "inativo", 0)
+        # multi-active: active in both services.
+        multi = make_account("multi@example.test")
+        link(multi, alpha, "ativo", 1)
+        link(multi, beta, "ativo", 1)
+        conn.commit()
+
+    body = client.get("/coverage").get_data(as_text=True)
+    # Extract each row's opening tag for attribute assertions.
+    def row_tag(email: str) -> str:
+        match = re.search(rf'(<tr data-coverage-row[^>]*>)(?:(?!</tr>).)*?{re.escape(email)}', body, re.S)
+        assert match, f"row for {email} not found"
+        return match.group(1)
+
+    full_tag = row_tag("full@example.test")
+    assert f'data-reg-svc-{alpha}="1"' in full_tag and f'data-reg-svc-{beta}="1"' in full_tag
+    assert 'data-reg-count="2"' in full_tag and 'data-active-count="2"' in full_tag
+
+    gap_tag = row_tag("gap@example.test")
+    assert f'data-reg-svc-{alpha}="1"' in gap_tag and f'data-reg-svc-{beta}="0"' in gap_tag
+
+    nolink_tag = row_tag("nolink@example.test")
+    # Beta has no account_service row -> synthesized as 0.
+    assert f'data-reg-svc-{alpha}="1"' in nolink_tag and f'data-reg-svc-{beta}="0"' in nolink_tag
+
+    nonereg_tag = row_tag("nonereg@example.test")
+    assert f'data-reg-svc-{alpha}="0"' in nonereg_tag and f'data-reg-svc-{beta}="0"' in nonereg_tag
+    assert 'data-reg-count="0"' in nonereg_tag
+
+    multi_tag = row_tag("multi@example.test")
+    assert 'data-active-count="2"' in multi_tag
 
 
 def test_coverage_matrix_requires_authentication(client):
@@ -274,3 +651,205 @@ def test_coverage_matrix_requires_authentication(client):
 
     assert response.status_code == 302
     assert response.headers["Location"].endswith("/login")
+
+
+def _seed_rotation_account(app, *, email="rot@example.test", password_changed_at=None, service_days=None, link_days=None, due_at=None):
+    with app.app_context():
+        conn = get_db()
+        service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Rotate')"))
+        if service_days is not None:
+            conn.execute("UPDATE services SET rotation_days=? WHERE id=?", (service_days, service_id))
+        account_id = inserted_id(conn.execute(
+            "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version, password_changed_at) VALUES (?, ?, ?, 1, ?)",
+            (email, b"x", b"0" * 12, password_changed_at),
+        ))
+        conn.execute(
+            "INSERT INTO account_service (account_id, service_id, status, registered, rotation_days, rotation_due_at) VALUES (?, ?, 'ativo', 1, ?, ?)",
+            (account_id, service_id, link_days, due_at),
+        )
+        conn.commit()
+    return service_id, account_id
+
+
+def test_service_rotation_policy_updates_and_audits(app, client):
+    login_admin(client)
+    service_id, _ = _seed_rotation_account(app)
+
+    resp = client.post(f"/service/{service_id}/rotation-policy", data={"rotation_days": "45"})
+    assert resp.status_code == 302
+    with app.app_context():
+        conn = get_db()
+        assert conn.execute("SELECT rotation_days FROM services WHERE id=?", (service_id,)).fetchone()[0] == 45
+        meta = json.loads(conn.execute("SELECT metadata_json FROM audit_events WHERE action='rotation.policy_updated' ORDER BY id DESC LIMIT 1").fetchone()[0])
+        assert meta == {"service_id": service_id, "rotation_days": 45, "rotation_due_at": None}
+
+    # Blank clears the policy.
+    assert client.post(f"/service/{service_id}/rotation-policy", data={"rotation_days": ""}).status_code == 302
+    with app.app_context():
+        assert get_db().execute("SELECT rotation_days FROM services WHERE id=?", (service_id,)).fetchone()[0] is None
+
+    # Invalid interval rejected.
+    assert client.post(f"/service/{service_id}/rotation-policy", data={"rotation_days": "abc"}).status_code == 400
+    assert client.post(f"/service/{service_id}/rotation-policy", data={"rotation_days": "0"}).status_code == 400
+    # Nonexistent service -> 404.
+    assert client.post("/service/999999/rotation-policy", data={"rotation_days": "10"}).status_code == 404
+
+
+def test_account_rotation_policy_updates_selected_link(app, client):
+    login_admin(client)
+    service_id, account_id = _seed_rotation_account(app)
+
+    resp = client.post(f"/accounts/{account_id}/rotation-policy", data={"service_id": service_id, "rotation_days": "15", "rotation_due_at": "2026-08-01"})
+    assert resp.status_code == 302
+    with app.app_context():
+        conn = get_db()
+        row = conn.execute("SELECT rotation_days, rotation_due_at FROM account_service WHERE account_id=? AND service_id=?", (account_id, service_id)).fetchone()
+        assert row["rotation_days"] == 15 and row["rotation_due_at"] == "2026-08-01"
+        meta = json.loads(conn.execute("SELECT metadata_json FROM audit_events WHERE action='rotation.policy_updated' ORDER BY id DESC LIMIT 1").fetchone()[0])
+        assert meta == {"service_id": service_id, "rotation_days": 15, "rotation_due_at": "2026-08-01"}
+
+    # Blanks clear both to inherit.
+    assert client.post(f"/accounts/{account_id}/rotation-policy", data={"service_id": service_id, "rotation_days": "", "rotation_due_at": ""}).status_code == 302
+    with app.app_context():
+        row = get_db().execute("SELECT rotation_days, rotation_due_at FROM account_service WHERE account_id=? AND service_id=?", (account_id, service_id)).fetchone()
+        assert row["rotation_days"] is None and row["rotation_due_at"] is None
+
+    # Invalid date rejected.
+    assert client.post(f"/accounts/{account_id}/rotation-policy", data={"service_id": service_id, "rotation_days": "", "rotation_due_at": "2026/08/01"}).status_code == 400
+
+
+def test_complete_rotation_replaces_password_and_restarts_schedules(app, client):
+    login_admin(client)
+    service_id, account_id = _seed_rotation_account(app, password_changed_at="2020-01-01T00:00:00+00:00", link_days=30, due_at="2026-08-01")
+    with app.app_context():
+        conn = get_db()
+        # Add a second linked service with its own explicit due override.
+        other_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Second')"))
+        conn.execute("INSERT INTO account_service (account_id, service_id, status, registered, rotation_due_at) VALUES (?, ?, 'ativo', 1, '2026-09-01')", (account_id, other_id))
+        conn.commit()
+        before = conn.execute("SELECT password_ciphertext, password_nonce, password_changed_at FROM accounts WHERE id=?", (account_id,)).fetchone()
+
+    resp = client.post(f"/accounts/{account_id}/rotation", data={"service_id": service_id, "outcome": "completed", "new_password": "brand-new-rotation-secret"})
+    assert resp.status_code == 302
+    assert "ok=rotation_completed" in resp.headers["Location"]
+    with app.app_context():
+        conn = get_db()
+        after = conn.execute("SELECT password_ciphertext, password_nonce, password_changed_at FROM accounts WHERE id=?", (account_id,)).fetchone()
+        # Encrypted envelope changed and timestamp advanced.
+        assert after["password_ciphertext"] != before["password_ciphertext"]
+        assert after["password_changed_at"] != before["password_changed_at"]
+        # Every explicit due override cleared so each service restarts from its interval.
+        overrides = conn.execute("SELECT COUNT(*) FROM account_service WHERE account_id=? AND rotation_due_at IS NOT NULL", (account_id,)).fetchone()[0]
+        assert overrides == 0
+        # New plaintext never appears in audit metadata.
+        audit_rows = conn.execute("SELECT metadata_json FROM audit_events WHERE action='rotation.completed'").fetchall()
+        assert audit_rows and all("brand-new-rotation-secret" not in (r[0] or "") for r in audit_rows)
+
+
+def test_incomplete_rotation_changes_nothing_and_audits(app, client):
+    login_admin(client)
+    service_id, account_id = _seed_rotation_account(app, password_changed_at="2020-01-01T00:00:00+00:00", link_days=30, due_at="2026-08-01")
+    with app.app_context():
+        conn = get_db()
+        before = conn.execute("SELECT password_ciphertext, password_changed_at FROM accounts WHERE id=?", (account_id,)).fetchone()
+        due_before = conn.execute("SELECT rotation_due_at FROM account_service WHERE account_id=? AND service_id=?", (account_id, service_id)).fetchone()[0]
+
+    resp = client.post(f"/accounts/{account_id}/rotation", data={"service_id": service_id, "outcome": "incomplete"})
+    assert resp.status_code == 302
+    assert "ok=rotation_incomplete" in resp.headers["Location"]
+    with app.app_context():
+        conn = get_db()
+        after = conn.execute("SELECT password_ciphertext, password_changed_at FROM accounts WHERE id=?", (account_id,)).fetchone()
+        assert after["password_ciphertext"] == before["password_ciphertext"]
+        assert after["password_changed_at"] == before["password_changed_at"]
+        due_after = conn.execute("SELECT rotation_due_at FROM account_service WHERE account_id=? AND service_id=?", (account_id, service_id)).fetchone()[0]
+        assert due_after == due_before
+        assert conn.execute("SELECT COUNT(*) FROM audit_events WHERE action='rotation.incomplete_marked'").fetchone()[0] == 1
+
+
+def test_complete_rotation_requires_password_for_completed(app, client):
+    login_admin(client)
+    service_id, account_id = _seed_rotation_account(app)
+    # completed without a password is rejected; no vault-skip path.
+    assert client.post(f"/accounts/{account_id}/rotation", data={"service_id": service_id, "outcome": "completed", "new_password": ""}).status_code == 400
+    # invalid outcome rejected.
+    assert client.post(f"/accounts/{account_id}/rotation", data={"service_id": service_id, "outcome": "bogus"}).status_code == 400
+
+
+def test_rotation_view_lists_due_and_enforces_role(app, client):
+    login_admin(client)
+    service_id, account_id = _seed_rotation_account(app, password_changed_at="2020-01-01T00:00:00+00:00", service_days=30)
+
+    resp = client.get(f"/rotation?service={service_id}")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "rot@example.test" in body
+    assert 'data-rotation="overdue"' in body
+
+    # Operator without membership is denied.
+    client.post("/logout")
+    login_operator(app, client)
+    assert client.get(f"/rotation?service={service_id}").status_code == 403
+
+
+def test_index_shows_rotation_column_counts_and_filter(app, client):
+    login_admin(client)
+    service_id, account_id = _seed_rotation_account(app, password_changed_at="2020-01-01T00:00:00+00:00", service_days=30)
+
+    body = client.get(f"/?service={service_id}").get_data(as_text=True)
+    assert 'id="filter-rotation"' in body
+    assert 'data-rotation="overdue"' in body
+    assert "data-rotation-overdue-count" in body
+    assert 'href="/rotation?service=' in body
+
+
+def test_update_password_clears_due_override_and_audits(app, client):
+    login_admin(client)
+    service_id, account_id = _seed_rotation_account(app, password_changed_at="2020-01-01T00:00:00+00:00", link_days=30, due_at="2026-08-01")
+
+    # A real password change through update() clears the explicit due override.
+    resp = client.post(f"/accounts/{account_id}", data={"service_id": service_id, "email": "rot@example.test", "password": "updated-rotation-secret"})
+    assert resp.status_code == 302
+    with app.app_context():
+        conn = get_db()
+        override = conn.execute("SELECT rotation_due_at FROM account_service WHERE account_id=? AND service_id=?", (account_id, service_id)).fetchone()[0]
+        assert override is None
+        meta = json.loads(conn.execute("SELECT metadata_json FROM audit_events WHERE action='account.updated' ORDER BY id DESC LIMIT 1").fetchone()[0])
+        assert meta["password_changed"] is True
+
+    # Email-only update preserves rotation state (re-seed an override first).
+    with app.app_context():
+        conn = get_db()
+        conn.execute("UPDATE account_service SET rotation_due_at='2026-08-01' WHERE account_id=? AND service_id=?", (account_id, service_id))
+        conn.commit()
+    resp = client.post(f"/accounts/{account_id}", data={"service_id": service_id, "email": "renamed-rot@example.test", "password": ""})
+    assert resp.status_code == 302
+    with app.app_context():
+        override = get_db().execute("SELECT rotation_due_at FROM account_service WHERE account_id=? AND service_id=?", (account_id, service_id)).fetchone()[0]
+        assert override == "2026-08-01"
+
+
+def test_add_and_import_set_password_changed_at(app, client):
+    login_admin(client)
+    with app.app_context():
+        service_id = inserted_id(get_db().execute("INSERT INTO services (name) VALUES ('Onboard')"))
+        get_db().commit()
+
+    # add() sets password_changed_at on creation.
+    resp = client.post("/add", data={"service_id": service_id, "email": "created@example.test", "password": "created-secret-value", "status": "ativo"})
+    assert resp.status_code == 302
+    with app.app_context():
+        ts = get_db().execute("SELECT password_changed_at FROM accounts WHERE email='created@example.test'").fetchone()[0]
+        assert ts is not None
+
+    # import_bulk() sets password_changed_at on each inserted row.
+    csv_bytes = b"email,password,status\nimported@example.test,imported-secret,ativo\n"
+    resp = client.post(
+        "/import",
+        data={"service_id": str(service_id), "file": (io.BytesIO(csv_bytes), "accounts.csv")},
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 302
+    with app.app_context():
+        ts = get_db().execute("SELECT password_changed_at FROM accounts WHERE email='imported@example.test'").fetchone()[0]
+        assert ts is not None

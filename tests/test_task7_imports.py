@@ -17,7 +17,7 @@ from openpyxl import Workbook
 from app import create_app
 from service_manager.audit import verify_audit_chain
 from service_manager.crypto import EncryptedValue, account_password_aad, decrypt_secret, hash_password
-from service_manager.db import get_db
+from service_manager.db import get_db, inserted_id
 from service_manager.imports import MAX_XLSX_UNCOMPRESSED_BYTES, parse_import_file
 
 
@@ -55,12 +55,12 @@ def csrf_headers(client, app) -> dict[str, str]:
 def authenticate_admin(app, client) -> int:
     with app.app_context():
         conn = get_db()
-        service_id = conn.execute("INSERT INTO services (name) VALUES ('Mail')").lastrowid
-        user_id = conn.execute(
+        service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Mail')"))
+        user_id = inserted_id(conn.execute(
             "INSERT INTO users (username, password_hash, role, is_active, must_change_password, created_at, updated_at) "
             "VALUES (?, ?, 'admin', 1, 0, ?, ?)",
             ("import-admin", hash_password("not-an-import-secret"), datetime.now(UTC).isoformat(), datetime.now(UTC).isoformat()),
-        ).lastrowid
+        ))
         conn.commit()
     with client.session_transaction() as session:
         now = time.time()
@@ -78,9 +78,11 @@ def csv_upload(client, app, service_id: int, data: bytes, *, filename: str = "ac
     )
 
 
-def workbook_bytes(rows: list[tuple[object, ...]]) -> bytes:
+def workbook_bytes(rows: list[tuple[str, ...]]) -> bytes:
     workbook = Workbook()
     worksheet = workbook.active
+    if worksheet is None:
+        raise RuntimeError("new workbook has no active worksheet")
     for row in rows:
         worksheet.append(row)
     stream = io.BytesIO()
@@ -413,11 +415,11 @@ def test_import_preserves_password_whitespace_byte_for_byte(app, client):
 
 @pytest.mark.parametrize("path", ["/template.csv", "/template.xlsx"])
 def test_operator_cannot_download_import_templates(app, client, path: str):
-    authenticate_admin(app, client)
+    service_id = authenticate_admin(app, client)
     with app.app_context():
         get_db().execute("UPDATE users SET role='operador' WHERE username='import-admin'")
         get_db().commit()
     with client.session_transaction() as session:
         session["role"] = "operador"
 
-    assert client.get(path).status_code == 403
+    assert client.get(f"{path}?service={service_id}").status_code == 403

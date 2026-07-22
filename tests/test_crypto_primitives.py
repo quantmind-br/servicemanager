@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import importlib
 import sys
 from pathlib import Path
 
@@ -50,8 +51,8 @@ def test_aes_gcm_round_trip_uses_unique_nonce_and_exact_aad(app):
 def test_aad_helpers_bind_to_the_exact_required_resource_identifiers():
     assert account_password_aad(7) == b"account:7:password"
     assert account_field_aad(7, 9) == b"account:7:field:9"
-    with pytest.raises(ImportError):
-        from service_manager.crypto import user_totp_aad  # noqa: F401
+    with pytest.raises(AttributeError):
+        getattr(importlib.import_module("service_manager.crypto"), "user_totp_aad")
 
 
 def test_crypto_authentication_failure_has_generic_error_and_no_partial_plaintext(app):

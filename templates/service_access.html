@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Acessos · Service Manager{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">Administração</p>
+  <h1>Acessos por serviço</h1>
+  <p class="muted">Conceda papéis por serviço a operadores. Administradores globais têm acesso a tudo.</p>
+</section>
+
+<section class="panel">
+  <div class="panel-heading">
+    <h2>Membros</h2>
+    <p>{{ services|length }} serviços · {{ users|length }} usuários</p>
+  </div>
+  <div class="table-wrap">
+    <table class="admin-users-table">
+      <thead>
+        <tr>
+          <th scope="col">Usuário</th>
+          {% for service in services %}<th scope="col">{{ service['name'] }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td><strong>{{ u['username'] }}</strong>{% if u['role'] == 'admin' %} <span class="muted-hint">admin global</span>{% elif not u['is_active'] %} <span class="muted-hint">inativo</span>{% endif %}</td>
+          {% for service in services %}
+          <td>
+            {% if u['role'] == 'admin' %}
+            <span class="muted-hint">acesso global</span>
+            {% elif not u['is_active'] %}
+            <span class="muted-hint">—</span>
+            {% else %}
+            {% set current_role = memberships.get((u['id'], service['id'])) %}
+            <select data-membership-role data-user-id="{{ u['id'] }}" data-service-id="{{ service['id'] }}" aria-label="Papel de {{ u['username'] }} em {{ service['name'] }}">
+              <option value=""{% if not current_role %} selected{% endif %}>Sem acesso</option>
+              {% for role in roles %}<option value="{{ role }}"{% if current_role == role %} selected{% endif %}>{{ role }}</option>{% endfor %}
+            </select>
+            {% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+<div id="toast" class="toast" role="alert" hidden></div>
+<span id="save-announcer" class="sr-only" aria-live="polite"></span>
+{% endblock %}

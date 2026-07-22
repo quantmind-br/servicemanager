@@ -10,6 +10,7 @@ import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -263,6 +264,18 @@ def test_container_files_enforce_locked_dependencies_non_root_runtime_and_health
         assert copied_path in dockerfile
     assert "TRUSTED_PROXY_HOPS=1" in dockerfile
     assert "COPY ." not in dockerfile
+
+
+def test_feature_source_files_are_present_for_packaging():
+    """The feature cutover ships these files; the Dockerfile copies their parent dirs."""
+    for relative in (
+        "service_manager/webhooks.py",
+        "scripts/webhook_worker.py",
+        "templates/service_access.html",
+        "templates/rotation.html",
+        "templates/security_integrations.html",
+    ):
+        assert (ROOT / relative).is_file(), relative
 
 
 def test_nginx_enforces_upload_limits_proxy_timeouts_rate_limiting_and_defensive_headers():
@@ -598,6 +611,7 @@ def test_supervisor_reports_failure_when_gunicorn_binary_is_missing(tmp_path: Pa
         env={
             **os.environ,
             "SERVICE_MANAGER_TEST_HOOKS": "1",
+            "SERVICE_MANAGER_WEBHOOK_WORKER_CMD": f"{sys.executable} {_write_fake_worker(tmp_path)[0]} {tmp_path / 'worker.term'}",
             "SERVICE_MANAGER_GUNICORN_CMD": str(tmp_path / "does-not-exist-binary"),
             "SERVICE_MANAGER_HEALTH_URL": "http://127.0.0.1:1/healthz",
         },
@@ -609,6 +623,20 @@ def test_supervisor_reports_failure_when_gunicorn_binary_is_missing(tmp_path: Pa
     assert process.returncode == 1
     assert "ERROR" in stderr
     assert "does-not-exist-binary" not in stderr
+
+
+def _write_fake_worker(tmp_path: Path) -> tuple[Path, Path]:
+    """A long-lived stand-in for the webhook worker that records SIGTERM."""
+    worker = tmp_path / "fake_worker.py"
+    worker_term = tmp_path / "worker.term"
+    worker.write_text(
+        "import signal, sys, time\n"
+        "term = sys.argv[1]\n"
+        "def stop(signum, frame):\n    open(term, 'w').write('term'); sys.exit(0)\n"
+        "signal.signal(signal.SIGTERM, stop)\n"
+        "while True: time.sleep(0.1)\n"
+    )
+    return worker, worker_term
 
 
 def _write_supervisor_fakes(tmp_path: Path, *, nginx_exits: bool = False) -> tuple[Path, Path, Path, Path]:
@@ -654,6 +682,7 @@ def test_entrypoint_delegates_process_lifecycle_to_supervisor():
 
 def test_supervisor_forwards_sigterm_to_gunicorn_and_nginx(tmp_path: Path):
     gunicorn, nginx, gunicorn_term, nginx_term = _write_supervisor_fakes(tmp_path)
+    worker, worker_term = _write_fake_worker(tmp_path)
     port = _free_port()
     nginx_started = tmp_path / "nginx.started"
     process = subprocess.Popen(
@@ -661,6 +690,7 @@ def test_supervisor_forwards_sigterm_to_gunicorn_and_nginx(tmp_path: Path):
         env={
             **os.environ,
             "SERVICE_MANAGER_TEST_HOOKS": "1",
+            "SERVICE_MANAGER_WEBHOOK_WORKER_CMD": f"{sys.executable} {worker} {worker_term}",
             "SERVICE_MANAGER_GUNICORN_CMD": f"{sys.executable} {gunicorn} {port} {gunicorn_term}",
             "SERVICE_MANAGER_NGINX_CMD": f"{sys.executable} {nginx} {nginx_term} {nginx_started}",
             "SERVICE_MANAGER_HEALTH_URL": f"http://127.0.0.1:{port}/healthz",
@@ -679,6 +709,8 @@ def test_supervisor_forwards_sigterm_to_gunicorn_and_nginx(tmp_path: Path):
 
     assert gunicorn_term.read_text() == "term"
     assert nginx_term.read_text() == "term"
+    assert worker_term.read_text() == "term"
+
 
 def test_supervisor_stops_gunicorn_when_sigterm_arrives_before_readiness(tmp_path: Path):
     terminated = tmp_path / "slow-gunicorn.term"
@@ -697,6 +729,7 @@ def test_supervisor_stops_gunicorn_when_sigterm_arrives_before_readiness(tmp_pat
         env={
             **os.environ,
             "SERVICE_MANAGER_TEST_HOOKS": "1",
+            "SERVICE_MANAGER_WEBHOOK_WORKER_CMD": f"{sys.executable} {_write_fake_worker(tmp_path)[0]} {tmp_path / 'worker.term'}",
             "SERVICE_MANAGER_GUNICORN_CMD": f"{sys.executable} {gunicorn} {terminated} {started}",
             "SERVICE_MANAGER_HEALTH_URL": "http://127.0.0.1:1/healthz",
         },
@@ -722,6 +755,7 @@ def test_supervisor_stops_gunicorn_when_nginx_child_dies(tmp_path: Path):
         env={
             **os.environ,
             "SERVICE_MANAGER_TEST_HOOKS": "1",
+            "SERVICE_MANAGER_WEBHOOK_WORKER_CMD": f"{sys.executable} {_write_fake_worker(tmp_path)[0]} {tmp_path / 'worker.term'}",
             "SERVICE_MANAGER_GUNICORN_CMD": f"{sys.executable} {gunicorn} {port} {gunicorn_term}",
             "SERVICE_MANAGER_NGINX_CMD": f"{sys.executable} {nginx} unused {nginx_started}",
             "SERVICE_MANAGER_HEALTH_URL": f"http://127.0.0.1:{port}/healthz",
@@ -767,6 +801,7 @@ def test_supervisor_reports_failure_when_child_exits_cleanly_but_unexpectedly(tm
         env={
             **os.environ,
             "SERVICE_MANAGER_TEST_HOOKS": "1",
+            "SERVICE_MANAGER_WEBHOOK_WORKER_CMD": f"{sys.executable} {_write_fake_worker(tmp_path)[0]} {tmp_path / 'worker.term'}",
             "SERVICE_MANAGER_GUNICORN_CMD": f"{sys.executable} {gunicorn} {port} {gunicorn_term}",
             "SERVICE_MANAGER_NGINX_CMD": f"{sys.executable} {nginx} {nginx_started}",
             "SERVICE_MANAGER_HEALTH_URL": f"http://127.0.0.1:{port}/healthz",
@@ -808,6 +843,7 @@ def test_supervisor_aborts_when_nginx_config_test_fails(tmp_path: Path):
         env={
             **os.environ,
             "SERVICE_MANAGER_TEST_HOOKS": "1",
+            "SERVICE_MANAGER_WEBHOOK_WORKER_CMD": f"{sys.executable} {_write_fake_worker(tmp_path)[0]} {tmp_path / 'worker.term'}",
             "SERVICE_MANAGER_GUNICORN_CMD": f"{sys.executable} {gunicorn} {port} {gunicorn_term}",
             "SERVICE_MANAGER_NGINX_CMD": f"{sys.executable} {nginx} {nginx_started}",
             "SERVICE_MANAGER_NGINX_TEST_CMD": f"{sys.executable} -c 'raise SystemExit(1)'",
@@ -886,8 +922,7 @@ def test_enable_wal_retries_only_on_transient_lock(monkeypatch: pytest.MonkeyPat
         def __init__(self, errors: list[BaseException]):
             self._errors = errors
             self.calls = 0
-
-        def execute(self, _statement: str):
+        def execute(self, _statement: str, /):
             self.calls += 1
             if self._errors:
                 raise self._errors.pop(0)
@@ -909,8 +944,7 @@ def test_enable_wal_fails_fast_on_non_lock_error(monkeypatch: pytest.MonkeyPatch
         def __init__(self, error: BaseException):
             self._error = error
             self.calls = 0
-
-        def execute(self, _statement: str):
+        def execute(self, _statement: str, /):
             self.calls += 1
             raise self._error
 
@@ -936,7 +970,7 @@ def test_snapshot_checkpoints_source_wal_before_opening_read_only_backup(tmp_pat
         def __init__(self, connection: sqlite3.Connection):
             self.connection = connection
 
-        def execute(self, statement: str, *args: object, **kwargs: object):
+        def execute(self, statement: str, *args: Any, **kwargs: Any):
             statements.append(statement)
             return self.connection.execute(statement, *args, **kwargs)
 
@@ -946,9 +980,10 @@ def test_snapshot_checkpoints_source_wal_before_opening_read_only_backup(tmp_pat
         def close(self) -> None:
             self.connection.close()
 
-    def recording_connect(path: object, *args: object, **kwargs: object):
+    def recording_connect(path: str | bytes | os.PathLike[str] | os.PathLike[bytes], *args: Any, **kwargs: Any):
         connection = real_connect(path, *args, **kwargs)
-        return RecordingConnection(connection) if Path(path) == source else connection
+        comparable_path = Path(os.fsdecode(path))
+        return RecordingConnection(connection) if comparable_path == source else connection
 
     monkeypatch.setattr(backup.sqlite3, "connect", recording_connect)
 

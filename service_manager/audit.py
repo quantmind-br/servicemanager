@@ -100,8 +100,17 @@ def _safe_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(metadata, Mapping):
         raise TypeError("audit metadata must be a mapping")
     normalized: dict[str, Any] = {}
+    # `password_changed` is an explicit, secret-free boolean flag in the audit API;
+    # allow it despite the "password" marker while rejecting any other marker key.
+    _SAFE_KEYS = {"password_changed"}
     for key, value in metadata.items():
-        if not isinstance(key, str) or any(marker in key.lower() for marker in _SECRET_MARKERS):
+        if not isinstance(key, str):
+            raise ValueError("audit metadata must not contain secrets")
+        if key in _SAFE_KEYS:
+            # A safe marker key may only carry a boolean, never a secret string.
+            if not isinstance(value, bool):
+                raise ValueError("audit metadata must not contain secrets")
+        elif any(marker in key.lower() for marker in _SECRET_MARKERS):
             raise ValueError("audit metadata must not contain secrets")
         if isinstance(value, (str, int, float, bool)) or value is None:
             normalized[key] = value
@@ -196,7 +205,7 @@ def verify_audit_chain(conn: Any | None = None) -> bool:
         key = _audit_key()
     except AuditIntegrityError:
         return False
-    conn = conn or get_db()
+    active_conn = get_db() if conn is None else conn
     path = str(current_app.config["DATABASE_PATH"])
     with _MARKS_LOCK:
         mark = _MARKS.setdefault(path, _ChainMark())
@@ -208,7 +217,7 @@ def verify_audit_chain(conn: Any | None = None) -> bool:
         )
         if not needs_full:
             try:
-                anchor = conn.execute(
+                anchor = active_conn.execute(
                     "SELECT event_hash FROM audit_events WHERE id = ?", (mark.verified_id,)
                 ).fetchone()
                 if anchor is None or not hmac.compare_digest(bytes(anchor[0]), mark.verified_hash):
@@ -216,13 +225,13 @@ def verify_audit_chain(conn: Any | None = None) -> bool:
             except (TypeError, ValueError, sqlite3.Error):
                 return False
         if needs_full:
-            ok, last_id, last_hash = _walk_chain(conn, key, 0, _ZERO_HASH)
+            ok, last_id, last_hash = _walk_chain(active_conn, key, 0, _ZERO_HASH)
             if ok:
                 _MARKS[path] = _ChainMark(last_id, last_hash, now, 0)
             else:
                 _MARKS.pop(path, None)  # next call re-walks from scratch
             return ok
-        ok, last_id, last_hash = _walk_chain(conn, key, mark.verified_id, mark.verified_hash)
+        ok, last_id, last_hash = _walk_chain(active_conn, key, mark.verified_id, mark.verified_hash)
         if not ok:
             _MARKS.pop(path, None)
             return False

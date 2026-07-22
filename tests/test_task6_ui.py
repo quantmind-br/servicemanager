@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import create_app
 from service_manager.crypto import account_field_aad, account_password_aad, encrypt_secret, hash_password
-from service_manager.db import get_db
+from service_manager.db import get_db, inserted_id
 
 
 KEY = base64.b64encode(b"u" * 32).decode("ascii")
@@ -42,33 +42,37 @@ def seed_authenticated_secret(app, client) -> tuple[int, int, int]:
     with app.app_context():
         conn = get_db()
         stamp = datetime.now(UTC).isoformat()
-        user_id = conn.execute(
+        user_id = inserted_id(conn.execute(
             "INSERT INTO users (username, password_hash, role, is_active, must_change_password, created_at, updated_at) "
             "VALUES (?, ?, 'operador', 1, 0, ?, ?)",
             ("ui-user", hash_password("user-password"), stamp, stamp),
-        ).lastrowid
-        service_id = conn.execute("INSERT INTO services (name) VALUES ('Email')").lastrowid
-        account_id = conn.execute(
+        ))
+        service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Email')"))
+        account_id = inserted_id(conn.execute(
             "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
             ("person@example.test", b"", b"0" * 12),
-        ).lastrowid
+        ))
         password = encrypt_secret("known-secret", aad=account_password_aad(account_id))
         conn.execute(
             "UPDATE accounts SET password_ciphertext=?, password_nonce=?, password_key_version=1 WHERE id=?",
             (password.ciphertext, password.nonce, account_id),
         )
         conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (account_id, service_id))
-        protected_field = conn.execute(
+        conn.execute(
+            "INSERT INTO service_members (user_id, service_id, role, created_at) VALUES (?, ?, 'service_admin', ?)",
+            (user_id, service_id, stamp),
+        )
+        protected_field = inserted_id(conn.execute(
             "INSERT INTO custom_fields (service_id, name) VALUES (?, 'Token')", (service_id,)
-        ).lastrowid
+        ))
         protected = encrypt_secret("known-field-secret", aad=account_field_aad(account_id, protected_field))
         conn.execute(
             "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, 1)",
             (protected_field, account_id, protected.ciphertext, protected.nonce),
         )
-        visible_field = conn.execute(
+        visible_field = inserted_id(conn.execute(
             "INSERT INTO custom_fields (service_id, name) VALUES (?, 'Observação')", (service_id,)
-        ).lastrowid
+        ))
         visible = encrypt_secret("nota pública", aad=account_field_aad(account_id, visible_field))
         conn.execute(
             "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, 1)",
@@ -279,6 +283,11 @@ def test_reveal_script_aborts_and_discards_hidden_inflight_responses(client):
 
 def test_creating_service_backfills_existing_account_links_for_displayed_controls(app, client):
     _, account_id, _ = seed_authenticated_secret(app, client)
+    with app.app_context():
+        get_db().execute("UPDATE users SET role='admin' WHERE username='ui-user'")
+        get_db().commit()
+    with client.session_transaction() as session:
+        session["role"] = "admin"
 
     created = client.post("/service/add", data={"name": "Novo serviço"})
 

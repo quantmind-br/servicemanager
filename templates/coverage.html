@@ -7,14 +7,26 @@
   <p class="muted">Compare status e cadastro de cada conta sem abrir serviço por serviço.</p>
 </section>
 
+{% if no_access %}
+<section class="panel empty-service">
+  <p class="empty-state">Você não possui acesso a nenhum serviço. Solicite a um administrador.</p>
+</section>
+{% else %}
 <div class="coverage-controls">
   <label>Exibir
     <select id="coverage-filter">
       <option value="">Todas</option>
       <option value="none-registered">Não cadastrada em nenhum serviço</option>
       <option value="multi-active">Ativa em mais de um serviço</option>
+      <option value="missing-registration">Falta cadastro em serviço selecionado</option>
     </select>
   </label>
+  <fieldset class="coverage-service-filter" hidden>
+    <legend class="muted">Serviços selecionados</legend>
+    {% for service in services %}
+    <label class="coverage-service-label"><input type="checkbox" data-coverage-service value="{{ service['id'] }}" checked>{{ service['name'] }}</label>
+    {% endfor %}
+  </fieldset>
   <span id="coverage-count" class="muted" aria-live="polite"></span>
 </div>
 
@@ -25,7 +37,7 @@
       <tbody>
         {% for account in accounts %}
         {% set agg = aggregates[account['id']] %}
-        <tr data-coverage-row data-reg-count="{{ agg.registered_count }}" data-active-count="{{ agg.active_count }}">
+        <tr data-coverage-row data-reg-count="{{ agg.registered_count }}" data-active-count="{{ agg.active_count }}"{% for service in services %} data-reg-svc-{{ service['id'] }}="{{ '1' if cells.get((account['id'], service['id'])) and cells.get((account['id'], service['id']))['registered'] else '0' }}"{% endfor %}>
           <th scope="row" class="coverage-email">{{ account['email'] }}</th>
           {% for service in services %}
           {% set cell = cells.get((account['id'], service['id'])) %}
@@ -43,4 +55,5 @@
     </table>
   </div>
 </section>
+{% endif %}
 {% endblock %}

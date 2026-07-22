@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% from "_macros.html" import password_field %}
+{% block title %}Rotação · Service Manager{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">Rotação de credenciais</p>
+  <h1>Rotação · {{ current_name }}</h1>
+  <p class="muted">Contas com rotação desconhecida, próxima do vencimento ou vencida neste serviço.</p>
+</section>
+
+<section class="panel accounts-panel">
+  <div class="table-wrap">
+    <table class="rotation-table">
+      <thead><tr><th>Conta</th><th>Última troca</th><th>Política</th><th>Vencimento</th><th>Estado</th>{% if can_edit %}<th>Concluir</th>{% endif %}</tr></thead>
+      <tbody>
+        {% for account in accounts %}
+        <tr data-rotation="{{ account['state'] }}">
+          <th scope="row">{{ account['email'] }}</th>
+          <td>{{ account['password_changed_at'] or '—' }}</td>
+          <td>{{ account['effective_days'] ~ ' dias' if account['effective_days'] else 'Sem política' }}</td>
+          <td>{{ account['due_at'] or '—' }}{% if account['days_remaining'] is not none %} ({{ account['days_remaining'] }}d){% endif %}</td>
+          <td><span class="rotation-badge rotation-{{ account['state'] }}">{{ labels[account['state']] }}</span></td>
+          {% if can_edit %}
+          <td>
+            <form class="compact-form" method="post" action="{{ url_for('routes.complete_rotation', account_id=account['id']) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="service_id" value="{{ service_id }}">
+              <input type="hidden" name="outcome" value="completed">
+              <label>Nova senha{{ password_field("new_password", "new-password") }}</label>
+              <button class="button button-small" type="submit">Concluir rotação</button>
+            </form>
+            <form class="inline-form" method="post" action="{{ url_for('routes.complete_rotation', account_id=account['id']) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="service_id" value="{{ service_id }}">
+              <input type="hidden" name="outcome" value="incomplete">
+              <button class="button button-small button-quiet" type="submit">Marcar pendente</button>
+            </form>
+          </td>
+          {% endif %}
+        </tr>
+        {% else %}
+        <tr><td colspan="{{ 6 if can_edit else 5 }}"><p class="empty-state">Nenhuma conta requer atenção de rotação.</p></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

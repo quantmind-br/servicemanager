@@ -329,6 +329,7 @@
   const filterInput = document.getElementById("account-filter");
   const statusFilter = document.getElementById("filter-status");
   const registeredFilter = document.getElementById("filter-registered");
+  const rotationFilter = document.getElementById("filter-rotation");
   const accountsTbody = document.querySelector("table.accounts tbody");
   let filterUrlTimer = 0;
   const syncUrlState = () => {
@@ -337,6 +338,7 @@
       q: (filterInput?.value || "").trim(),
       st: statusFilter?.value || "",
       reg: registeredFilter?.value || "",
+      rot: rotationFilter?.value || "",
     };
     for (const [key, value] of Object.entries(values)) {
       if (value) url.searchParams.set(key, value);
@@ -354,7 +356,7 @@
     window.history.replaceState(null, "", url);
   };
 
-  if (accountsTbody && (filterInput || statusFilter || registeredFilter)) {
+  if (accountsTbody && (filterInput || statusFilter || registeredFilter || rotationFilter)) {
     const rowInfo = Array.from(accountsTbody.querySelectorAll("tr[data-row]")).map((tr) => ({
       tr,
       search: normalize(tr.dataset.search || ""),
@@ -367,19 +369,22 @@
       const query = normalize((filterInput?.value || "").trim());
       const status = statusFilter?.value || "";
       const registered = registeredFilter?.value || "";
+      const rotation = rotationFilter?.value || "";
       let visible = 0;
       for (const info of rowInfo) {
         const haystack = info.search + " " + info.statusLabel;
+        // All active filters combine (AND); rotation is one more predicate.
         const show =
           subsequenceMatch(query, haystack) &&
           (!status || info.tr.dataset.status === status) &&
-          (!registered || info.tr.dataset.registered === registered);
+          (!registered || info.tr.dataset.registered === registered) &&
+          (!rotation || info.tr.dataset.rotation === rotation);
         info.tr.hidden = !show;
         if (!show && info.detail) info.detail.hidden = true;
         if (show) visible += 1;
       }
       if (noResults) noResults.hidden = visible !== 0;
-      const active = Boolean(query || status || registered);
+      const active = Boolean(query || status || registered || rotation);
       const countEl = document.getElementById("filter-count");
       if (countEl) countEl.textContent = active ? `Exibindo ${visible} de ${rowInfo.length} contas` : "";
       const clearButton = document.getElementById("filter-clear");
@@ -396,16 +401,19 @@
     filterInput?.addEventListener("input", () => applyFilter(300));
     statusFilter?.addEventListener("change", () => applyFilter());
     registeredFilter?.addEventListener("change", () => applyFilter());
+    rotationFilter?.addEventListener("change", () => applyFilter());
     document.getElementById("filter-clear")?.addEventListener("click", () => {
       if (filterInput) filterInput.value = "";
       if (statusFilter) statusFilter.value = "";
       if (registeredFilter) registeredFilter.value = "";
+      if (rotationFilter) rotationFilter.value = "";
       applyFilter();
     });
     const initialParams = new URLSearchParams(window.location.search);
     if (filterInput) filterInput.value = initialParams.get("q") || "";
     if (statusFilter && Array.from(statusFilter.options).some((option) => option.value === initialParams.get("st"))) statusFilter.value = initialParams.get("st") || "";
     if (registeredFilter && Array.from(registeredFilter.options).some((option) => option.value === initialParams.get("reg"))) registeredFilter.value = initialParams.get("reg") || "";
+    if (rotationFilter && Array.from(rotationFilter.options).some((option) => option.value === initialParams.get("rot"))) rotationFilter.value = initialParams.get("rot") || "";
     applyFilter();
   }
 
@@ -465,9 +473,14 @@
   const bulkBar = document.getElementById("bulk-bar");
   const bulkCount = document.getElementById("bulk-count");
   const updateBulkUi = () => {
-    const selected = rowSelects.filter((control) => selectedAccountIds.has(control.value));
-    if (bulkBar) bulkBar.hidden = selected.length === 0;
-    if (bulkCount) bulkCount.textContent = `${selected.length} selecionadas`;
+    if (bulkBar) bulkBar.hidden = selectedAccountIds.size === 0;
+    if (bulkCount) {
+      const total = selectedAccountIds.size;
+      const visible = rowSelects.filter(
+        (control) => selectedAccountIds.has(control.value) && !control.closest("tr[data-row]")?.hidden,
+      ).length;
+      bulkCount.textContent = visible < total ? `${total} selecionadas · ${visible} visíveis` : `${total} selecionadas`;
+    }
     for (const control of rowSelects) control.checked = selectedAccountIds.has(control.value);
     const visibleControls = rowSelects.filter((control) => !control.closest("tr[data-row]")?.hidden);
     if (selectVisible) {
@@ -475,10 +488,8 @@
       selectVisible.indeterminate = visibleControls.some((control) => selectedAccountIds.has(control.value)) && !selectVisible.checked;
     }
   };
+  // Selection is memory-only and MUST survive rows being hidden by filters/sort.
   refreshBulkSelection = () => {
-    for (const control of rowSelects) {
-      if (control.closest("tr[data-row]")?.hidden) selectedAccountIds.delete(control.value);
-    }
     updateBulkUi();
   };
   rowSelects.forEach((control) => {
@@ -522,9 +533,34 @@
   });
   document.getElementById("bulk-registered-on")?.addEventListener("click", () => submitBulk("/accounts/bulk/registered", { registered: "1" }));
   document.getElementById("bulk-registered-off")?.addEventListener("click", () => submitBulk("/accounts/bulk/registered", { registered: "0" }));
-  document.getElementById("bulk-delete")?.addEventListener("click", async () => {
+  document.getElementById("bulk-apply-field")?.addEventListener("click", () => {
+    const fieldId = document.getElementById("bulk-field-id")?.value || "";
+    const fieldValue = document.getElementById("bulk-field-value")?.value || "";
+    if (!fieldId) { showToast("Selecione um campo."); return; }
+    if (!fieldValue) { showToast("Informe um valor."); return; }
+    submitBulk("/accounts/bulk/field", { field_id: fieldId, field_value: fieldValue });
+  });
+  const deleteDialog = document.getElementById("delete-confirm-dialog");
+  const deleteInput = document.getElementById("delete-confirm-input");
+  const deleteAccept = document.getElementById("delete-confirm-accept");
+  const deleteInstruction = document.getElementById("delete-confirm-instruction");
+  document.getElementById("bulk-delete")?.addEventListener("click", () => {
+    if (!selectedAccountIds.size || !deleteDialog) return;
     const count = selectedAccountIds.size;
-    if (await askConfirm(`Excluir ${count} contas? Esta ação não pode ser desfeita.`)) submitBulk("/accounts/bulk/delete");
+    if (deleteInstruction) deleteInstruction.textContent = `Digite ${count} para confirmar`;
+    if (deleteInput) deleteInput.value = "";
+    if (deleteAccept) deleteAccept.disabled = true;
+    deleteDialog.showModal();
+  });
+  deleteInput?.addEventListener("input", () => {
+    const trimmed = deleteInput.value.trim();
+    if (deleteAccept) deleteAccept.disabled = trimmed !== String(selectedAccountIds.size);
+  });
+  document.getElementById("delete-confirm-cancel")?.addEventListener("click", () => deleteDialog?.close());
+  deleteDialog?.addEventListener("cancel", (event) => { event.preventDefault(); deleteDialog.close(); });
+  deleteAccept?.addEventListener("click", () => {
+    if (deleteInput?.value.trim() !== String(selectedAccountIds.size)) return;
+    submitBulk("/accounts/bulk/delete", { confirmation_count: String(selectedAccountIds.size) });
   });
   updateBulkUi();
 
@@ -748,6 +784,40 @@
     });
   });
 
+  document.querySelectorAll("[data-membership-role]").forEach((select) => {
+    select.dataset.prev = select.value;
+    select.addEventListener("change", async () => {
+      const previous = select.dataset.prev;
+      const serviceId = select.dataset.serviceId;
+      const userId = select.dataset.userId;
+      select.disabled = true;
+      try {
+        const url = select.value
+          ? `/admin/service-access/${serviceId}/${userId}`
+          : `/admin/service-access/${serviceId}/${userId}/delete`;
+        const body = select.value ? new URLSearchParams({ role: select.value }) : new URLSearchParams();
+        const response = await adminFetch(url, body);
+        if (!response) return;
+        if (response.status === 204) {
+          select.dataset.prev = select.value;
+          announceSave("Acesso atualizado.");
+        } else if (response.status === 400) {
+          showToast((await response.text()) || "Acesso inválido.");
+          select.value = previous;
+        } else if (response.status === 404) {
+          select.value = previous;
+        } else {
+          throw new Error("membership change failed");
+        }
+      } catch {
+        select.value = previous;
+        showToast("Não foi possível atualizar o acesso.");
+      } finally {
+        select.disabled = false;
+      }
+    });
+  });
+
   const adminCreateForm = document.querySelector("[data-admin-create]");
   const tempPasswordDialog = document.getElementById("temp-password-dialog");
   adminCreateForm?.addEventListener("submit", async (event) => {
@@ -794,23 +864,148 @@
     event.preventDefault();
     dismissTempPassword();
   });
+
+  // ===== Security integrations (webhooks): async CRUD + one-time signing secret.
+  const webhookSecretDialog = document.getElementById("webhook-secret-dialog");
+  const clearWebhookSecret = () => {
+    if (!webhookSecretDialog) return;
+    const input = document.getElementById("webhook-secret-value");
+    const code = webhookSecretDialog.querySelector("[data-webhook-secret]");
+    if (input) input.value = "";
+    if (code) code.textContent = "";
+  };
+  const dismissWebhookSecret = () => {
+    if (!webhookSecretDialog) return;
+    clearWebhookSecret();
+    if (webhookSecretDialog.open) webhookSecretDialog.close();
+    window.location.reload();
+  };
+  webhookSecretDialog?.querySelector("[data-webhook-secret-dismiss]")?.addEventListener("click", dismissWebhookSecret);
+  webhookSecretDialog?.addEventListener("cancel", (event) => { event.preventDefault(); dismissWebhookSecret(); });
+  window.addEventListener("pagehide", clearWebhookSecret);
+
+  const webhookCreateForm = document.querySelector("[data-webhook-create]");
+  const webhookCreateError = document.querySelector("[data-webhook-create-error]");
+  webhookCreateForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const button = webhookCreateForm.querySelector('button[type="submit"]');
+    const label = button?.textContent || "Criar";
+    if (button) { button.disabled = true; button.textContent = "Enviando…"; }
+    if (webhookCreateError) { webhookCreateError.hidden = true; webhookCreateError.textContent = ""; }
+    try {
+      const response = await fetch(webhookCreateForm.action, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRFToken": csrfToken, "Accept": "application/json" },
+        body: new URLSearchParams(new FormData(webhookCreateForm)),
+      });
+      if (response.status === 201) {
+        const payload = await response.json();
+        const input = document.getElementById("webhook-secret-value");
+        const code = webhookSecretDialog?.querySelector("[data-webhook-secret]");
+        if (input) input.value = payload.signing_secret || "";
+        if (code) code.textContent = payload.signing_secret || "";
+        webhookSecretDialog?.showModal();
+      } else if (response.status === 400) {
+        if (webhookCreateError) { webhookCreateError.textContent = "Integração inválida."; webhookCreateError.hidden = false; }
+        else showToast("Integração inválida.");
+      } else {
+        throw new Error("webhook create failed");
+      }
+    } catch {
+      showToast("Não foi possível criar a integração.");
+    } finally {
+      if (button) { button.disabled = false; button.textContent = label; }
+    }
+  });
+
+  const webhookAction = async (form, { confirm, reloadOnSuccess, successToast } = {}) => {
+    if (confirm && !(await askConfirm(confirm))) return;
+    const button = form.querySelector('button[type="submit"]');
+    const label = button?.textContent || "";
+    const errorBox = form.querySelector("[data-form-error]");
+    if (button) { button.disabled = true; button.textContent = "Enviando…"; }
+    if (errorBox) { errorBox.hidden = true; errorBox.textContent = ""; }
+    try {
+      const response = await fetch(form.action, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRFToken": csrfToken, "Accept": "application/json" },
+        body: new URLSearchParams(new FormData(form)),
+      });
+      if (response.status === 204) {
+        if (successToast) showToast(successToast);
+        if (reloadOnSuccess) window.location.reload();
+      } else if (response.status === 400) {
+        if (errorBox) { errorBox.textContent = "Integração inválida."; errorBox.hidden = false; }
+        else showToast("Integração inválida.");
+      } else if (response.status === 404) {
+        showToast("Integração não encontrada.");
+      } else {
+        throw new Error("webhook action failed");
+      }
+    } catch {
+      showToast("Não foi possível concluir a ação.");
+    } finally {
+      if (button) { button.disabled = false; button.textContent = label; }
+    }
+  };
+  document.querySelectorAll("[data-webhook-edit]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      webhookAction(form, { reloadOnSuccess: true });
+    });
+  });
+  document.querySelectorAll("[data-webhook-test]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      webhookAction(form, { successToast: "Evento de teste enfileirado." });
+    });
+  });
+  document.querySelectorAll("[data-webhook-delete]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      webhookAction(form, { confirm: "Excluir esta integração?", reloadOnSuccess: true });
+    });
+  });
   // ===== Coverage matrix filtering.
   const coverageFilter = document.getElementById("coverage-filter");
   const coverageRows = Array.from(document.querySelectorAll("[data-coverage-row]"));
+  const coverageServiceToggles = Array.from(document.querySelectorAll("[data-coverage-service]"));
   const applyCoverageFilter = () => {
     const filter = coverageFilter?.value || "";
+    const checkedServices = coverageServiceToggles.filter((box) => box.checked).map((box) => box.value);
     let visible = 0;
     for (const row of coverageRows) {
-      const show = !filter ||
-        (filter === "none-registered" && Number(row.dataset.regCount) === 0) ||
-        (filter === "multi-active" && Number(row.dataset.activeCount) > 1);
+      let show;
+      if (filter === "none-registered") {
+        show = Number(row.dataset.regCount) === 0;
+      } else if (filter === "multi-active") {
+        show = Number(row.dataset.activeCount) > 1;
+      } else if (filter === "missing-registration") {
+        // Show when at least one checked service is not registered for this row.
+        // No checked services shows all rows.
+        show = checkedServices.length === 0 ||
+          checkedServices.some((id) => row.getAttribute("data-reg-svc-" + id) === "0");
+      } else {
+        show = true;
+      }
       row.hidden = !show;
       if (show) visible += 1;
     }
+    // Service checkboxes only scope the missing-registration mode; hide them
+    // otherwise so irrelevant controls are absent while keeping checked state.
+    const serviceFieldset = document.querySelector(".coverage-service-filter");
+    if (serviceFieldset) serviceFieldset.hidden = filter !== "missing-registration";
     const count = document.getElementById("coverage-count");
     if (count) count.textContent = `Exibindo ${visible} de ${coverageRows.length} contas`;
   };
   coverageFilter?.addEventListener("change", applyCoverageFilter);
+  coverageServiceToggles.forEach((box) => box.addEventListener("change", applyCoverageFilter));
   if (coverageFilter) applyCoverageFilter();
 
 })();

@@ -57,24 +57,40 @@ def _require_aad(aad: bytes) -> bytes:
     return aad
 
 
-def encrypt_secret(plaintext: str, *, aad: bytes) -> EncryptedValue:
+def _encrypt_secret_with_cipher(cipher: AESGCM, plaintext: str, *, aad: bytes) -> EncryptedValue:
     if not isinstance(plaintext, str):
         raise TypeError("plaintext must be text")
     nonce = secrets.token_bytes(12)
-    ciphertext = _cipher().encrypt(nonce, plaintext.encode("utf-8"), _require_aad(aad))
+    ciphertext = cipher.encrypt(nonce, plaintext.encode("utf-8"), _require_aad(aad))
     return EncryptedValue(ciphertext=ciphertext, nonce=nonce, key_version=1)
 
 
-def decrypt_secret(value: EncryptedValue, *, aad: bytes) -> str:
+def _decrypt_secret_with_cipher(cipher: AESGCM, value: EncryptedValue, *, aad: bytes) -> str:
     try:
         if not isinstance(value, EncryptedValue) or value.key_version != 1 or len(value.nonce) != 12:
             raise ValueError("invalid encrypted value")
-        plaintext = _cipher().decrypt(value.nonce, value.ciphertext, _require_aad(aad))
+        plaintext = cipher.decrypt(value.nonce, value.ciphertext, _require_aad(aad))
         return plaintext.decode("utf-8")
     except (CryptoError, InvalidTag, UnicodeDecodeError, TypeError, ValueError) as error:
         if isinstance(error, CryptoError) and str(error).startswith("DATA_KEY_V1"):
             raise
         raise CryptoError("unable to decrypt secret") from error
+
+
+def encrypt_secret_with_key(data_key_b64: str, plaintext: str, *, aad: bytes) -> EncryptedValue:
+    return _encrypt_secret_with_cipher(_cipher_for(data_key_b64), plaintext, aad=aad)
+
+
+def decrypt_secret_with_key(data_key_b64: str, value: EncryptedValue, *, aad: bytes) -> str:
+    return _decrypt_secret_with_cipher(_cipher_for(data_key_b64), value, aad=aad)
+
+
+def encrypt_secret(plaintext: str, *, aad: bytes) -> EncryptedValue:
+    return _encrypt_secret_with_cipher(_cipher(), plaintext, aad=aad)
+
+
+def decrypt_secret(value: EncryptedValue, *, aad: bytes) -> str:
+    return _decrypt_secret_with_cipher(_cipher(), value, aad=aad)
 
 
 def account_password_aad(account_id: int) -> bytes:
@@ -83,6 +99,14 @@ def account_password_aad(account_id: int) -> bytes:
 
 def account_field_aad(account_id: int, field_id: int) -> bytes:
     return f"account:{account_id}:field:{field_id}".encode("utf-8")
+
+
+def webhook_signing_secret_aad(config_id: int) -> bytes:
+    return f"webhook:{config_id}:signing-secret".encode("utf-8")
+
+
+def webhook_url_aad(config_id: int) -> bytes:
+    return f"webhook:{config_id}:url".encode("utf-8")
 
 
 

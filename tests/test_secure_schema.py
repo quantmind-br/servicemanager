@@ -40,6 +40,10 @@ def test_new_database_has_the_exact_username_only_secure_schema(app):
         "users",
         "security_events",
         "audit_events",
+        "service_members",
+        "webhook_configs",
+        "webhook_subscriptions",
+        "webhook_deliveries",
     }
     expected_user_columns = {
         "id",
@@ -103,6 +107,66 @@ def test_secure_schema_constraints_and_append_only_triggers(app):
             conn.execute("UPDATE audit_events SET action = 'changed' WHERE id = ?", (event_id,))
         with pytest.raises(sqlite3.DatabaseError, match="audit_events is append-only"):
             conn.execute("DELETE FROM audit_events WHERE id = ?", (event_id,))
+
+
+def test_feature_pack_schema_columns_constraints_indexes_and_delivery_mutability(app):
+    with app.app_context():
+        conn = get_db()
+        assert "password_changed_at" in table_columns(conn, "accounts")
+        assert "rotation_days" in table_columns(conn, "services")
+        assert {"rotation_days", "rotation_due_at"} <= table_columns(conn, "account_service")
+        assert table_columns(conn, "service_members") == {"user_id", "service_id", "role", "created_at"}
+        indexes = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        assert {"service_members_service_id", "webhook_deliveries_status_next_attempt", "webhook_deliveries_config_created"} <= indexes
+        # security_events kind CHECK accepts the new kinds.
+        for kind in ("reveal_blocked", "audit_degraded"):
+            conn.execute("INSERT INTO security_events (kind, subject, source_ip, occurred_at) VALUES (?, 's', '127.0.0.1', '2026-01-01T00:00:00Z')", (kind,))
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO security_events (kind, subject, source_ip, occurred_at) VALUES ('bogus', 's', '127.0.0.1', '2026-01-01T00:00:00Z')")
+        # rotation_days CHECK bounds.
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO services (name, rotation_days) VALUES ('Bad', 0)")
+        service_id = conn.execute("INSERT INTO services (name, rotation_days) VALUES ('Mail', 30)").lastrowid
+        user_id = conn.execute(
+            "INSERT INTO users (username, password_hash, role, created_at, updated_at) VALUES ('member', 'h', 'operador', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        ).lastrowid
+        # service_members role CHECK.
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO service_members (user_id, service_id, role, created_at) VALUES (?, ?, 'bogus', '2026-01-01T00:00:00Z')", (user_id, service_id))
+        conn.execute("INSERT INTO service_members (user_id, service_id, role, created_at) VALUES (?, ?, 'service_admin', '2026-01-01T00:00:00Z')", (user_id, service_id))
+        # service_members FK cascades on service delete.
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("DELETE FROM services WHERE id = ?", (service_id,))
+        assert conn.execute("SELECT COUNT(*) FROM service_members WHERE service_id = ?", (service_id,)).fetchone()[0] == 0
+        # webhook config + subscription CHECK + delivery mutability.
+        config_id = conn.execute(
+            "INSERT INTO webhook_configs (destination_host, url_ciphertext, url_nonce, url_key_version, signing_secret_ciphertext, signing_secret_nonce, signing_secret_key_version, created_at, updated_at) VALUES ('h.test', ?, ?, 1, ?, ?, 1, ?, ?)",
+            (b"u", b"0" * 12, b"s", b"1" * 12, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+        ).lastrowid
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO webhook_subscriptions (config_id, event_type) VALUES (?, 'bogus')", (config_id,))
+        conn.execute("INSERT INTO webhook_subscriptions (config_id, event_type) VALUES (?, 'login_failures')", (config_id,))
+        delivery_id = conn.execute(
+            "INSERT INTO webhook_deliveries (config_id, event_type, payload_json, status, next_attempt_at, created_at) VALUES (?, 'login_failures', '{}', 'pending', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            (config_id,),
+        ).lastrowid
+        conn.execute("UPDATE webhook_deliveries SET status = 'succeeded' WHERE id = ?", (delivery_id,))
+        assert conn.execute("SELECT status FROM webhook_deliveries WHERE id = ?", (delivery_id,)).fetchone()["status"] == "succeeded"
+        # webhook_deliveries.config_id FK must NOT cascade: a hard config delete cannot silently drop delivery history.
+        delivery_fks = list(conn.execute("PRAGMA foreign_key_list(webhook_deliveries)"))
+        assert len(delivery_fks) == 1 and delivery_fks[0]["table"] == "webhook_configs" and delivery_fks[0]["on_delete"] == "NO ACTION"
+        # service_members FKs cascade to both parents.
+        member_fks = {row["table"]: row["on_delete"] for row in conn.execute("PRAGMA foreign_key_list(service_members)")}
+        assert member_fks == {"users": "CASCADE", "services": "CASCADE"}
+        # webhook_subscriptions cascades to its config.
+        sub_fks = {row["table"]: row["on_delete"] for row in conn.execute("PRAGMA foreign_key_list(webhook_subscriptions)")}
+        assert sub_fks == {"webhook_configs": "CASCADE"}
+        # Exact CHECK literals frozen in the canonical schema SQL.
+        sql = {row["name"]: row["sql"] for row in conn.execute("SELECT name, sql FROM sqlite_master WHERE type='table'")}
+        assert "role IN ('viewer', 'editor', 'service_admin')" in sql["service_members"]
+        assert "attempt_count BETWEEN 0 AND 5" in sql["webhook_deliveries"]
+        assert "status IN ('pending', 'delivering', 'retry', 'succeeded', 'failed')" in sql["webhook_deliveries"]
+        assert "kind IN ('login_failure', 'reveal', 'reveal_blocked', 'audit_degraded')" in sql["security_events"]
 
 
 def test_custom_fields_have_no_classification_and_field_values_require_an_envelope(app):
@@ -220,6 +284,10 @@ def test_legacy_add_route_stores_an_encrypted_password(app):
             "INSERT INTO users (username, password_hash, role, is_active, must_change_password, created_at, updated_at) VALUES (?, ?, 'operador', 1, 0, ?, ?)",
             ("operator", "unused", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
         ).lastrowid
+        conn.execute(
+            "INSERT INTO service_members (user_id, service_id, role, created_at) VALUES (?, ?, 'editor', '2026-01-01T00:00:00+00:00')",
+            (user_id, service_id),
+        )
         conn.commit()
     with client.session_transaction() as session:
         session.update(user_id=user_id, role="operador", session_version=0, authenticated_at=time.time(), last_seen_at=time.time(), reauthenticated_at=None)

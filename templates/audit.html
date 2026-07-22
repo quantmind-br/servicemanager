@@ -14,8 +14,9 @@
     <label>ID do usuário<input name="actor" type="number" min="1" value="{{ filters.actor }}"></label>
     <label>Desde<input name="since" type="date" value="{{ filters.since }}"></label>
     <label>Até<input name="until" type="date" value="{{ filters.until }}"></label>
+    <label>IP<input name="source_ip" value="{{ filters.source_ip }}" maxlength="64"></label>
     <button class="button" type="submit">Filtrar</button>
-    <a class="button button-quiet" href="{{ url_for('routes.audit_csv', action=filters.action, target_type=filters.target_type, actor=filters.actor, since=filters.since, until=filters.until) }}">Exportar CSV</a>
+    <a class="button button-quiet" href="{{ url_for('routes.audit_csv', action=filters.action, target_type=filters.target_type, actor=filters.actor, since=filters.since, until=filters.until, source_ip=filters.source_ip) }}">Exportar CSV</a>
   </form>
 </section>
 
@@ -42,8 +43,8 @@
     </table>
   </div>
   <nav class="pagination" aria-label="Paginação da auditoria">
-    {% if page > 1 %}<a class="button button-quiet" href="{{ url_for('routes.audit_view', page=page-1, action=filters.action, target_type=filters.target_type, actor=filters.actor, since=filters.since, until=filters.until) }}">Anterior</a>{% endif %}
-    {% if has_next %}<a class="button button-quiet" href="{{ url_for('routes.audit_view', page=page+1, action=filters.action, target_type=filters.target_type, actor=filters.actor, since=filters.since, until=filters.until) }}">Próxima</a>{% endif %}
+    {% if page > 1 %}<a class="button button-quiet" href="{{ url_for('routes.audit_view', page=page-1, action=filters.action, target_type=filters.target_type, actor=filters.actor, since=filters.since, until=filters.until, source_ip=filters.source_ip) }}">Anterior</a>{% endif %}
+    {% if has_next %}<a class="button button-quiet" href="{{ url_for('routes.audit_view', page=page+1, action=filters.action, target_type=filters.target_type, actor=filters.actor, since=filters.since, until=filters.until, source_ip=filters.source_ip) }}">Próxima</a>{% endif %}
   </nav>
 </section>
 {% endblock %}

@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Integrações · Service Manager{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">Administração</p>
+  <h1>Integrações de segurança</h1>
+  <p class="muted">Envie eventos de segurança assinados a endpoints HTTPS externos. A URL completa fica criptografada e nunca é exibida.</p>
+</section>
+
+<section class="panel">
+  <div class="panel-heading">
+    <h2>Endpoints</h2>
+    <p>{{ configs|length }} de 20 configurados</p>
+  </div>
+  {% if configs %}
+  <div class="table-wrap">
+    <table class="admin-users-table">
+      <thead>
+        <tr>
+          <th scope="col">Host de destino</th>
+          <th scope="col">Descrição</th>
+          <th scope="col">Ativo</th>
+          <th scope="col">Assinaturas</th>
+          <th scope="col">Entregas recentes</th>
+          <th scope="col">Ações</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for config in configs %}
+        <tr data-webhook-row data-config-id="{{ config['id'] }}">
+          <td><strong>{{ config['destination_host'] }}</strong></td>
+          <td>{{ config['description'] or '—' }}</td>
+          <td>{{ "Sim" if config['enabled'] else "Não" }}</td>
+          <td>
+            {% if config['subscriptions'] %}
+            <ul class="webhook-subscriptions">
+              {% for event in config['subscriptions'] %}<li>{{ event }}</li>{% endfor %}
+            </ul>
+            {% else %}<span class="muted-hint">—</span>{% endif %}
+          </td>
+          <td>
+            {% if config['recent_deliveries'] %}
+            <ul class="webhook-deliveries">
+              {% for delivery in config['recent_deliveries'] %}
+              <li>
+                <span class="rotation-badge status-{{ delivery['status'] }}">{{ delivery['status'] }}</span>
+                {{ delivery['event_type'] }}
+                {% if delivery['last_status_code'] %}· HTTP {{ delivery['last_status_code'] }}{% endif %}
+                {% if delivery['last_error'] %}· {{ delivery['last_error'] }}{% endif %}
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}<span class="muted-hint">Nenhuma entrega</span>{% endif %}
+          </td>
+          <td class="cell-actions">
+            <form class="edit-form" method="post" action="{{ url_for('routes.security_integration_update', config_id=config['id']) }}" data-webhook-edit>
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <label class="filter-select">URL nova (deixe em branco para manter)
+                <input name="url" type="url" maxlength="2048" autocomplete="off" placeholder="https://…">
+              </label>
+              <label class="filter-select">Descrição
+                <input name="description" type="text" maxlength="200" value="{{ config['description'] }}">
+              </label>
+              <label class="toggle-inline">
+                <input type="checkbox" name="enabled" value="1"{% if config['enabled'] %} checked{% endif %}> Ativo
+              </label>
+              <fieldset class="webhook-events">
+                <legend>Eventos</legend>
+                {% for event in event_types %}
+                <label><input type="checkbox" name="event_types" value="{{ event }}"{% if event in config['subscriptions'] %} checked{% endif %}> {{ event }}</label>
+                {% endfor %}
+              </fieldset>
+              <div class="dialog-actions">
+                <button class="button button-small" type="submit">Salvar</button>
+              </div>
+              <p class="feedback-error" data-form-error hidden></p>
+            </form>
+            <form class="inline-form" method="post" action="{{ url_for('routes.security_integration_test', config_id=config['id']) }}" data-webhook-test>
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="button button-small button-quiet" type="submit">Testar</button>
+            </form>
+            <form class="inline-form" method="post" action="{{ url_for('routes.security_integration_delete', config_id=config['id']) }}" data-webhook-delete>
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="button button-small button-danger" type="submit">Excluir</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state">Nenhuma integração configurada.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-heading">
+    <h2>Nova integração</h2>
+    <p>O segredo de assinatura aparece uma única vez.</p>
+  </div>
+  {% if at_capacity %}
+  <p class="empty-state">Limite de 20 integrações atingido. Exclua uma para adicionar outra.</p>
+  {% else %}
+  <form method="post" action="{{ url_for('routes.security_integration_create') }}" data-webhook-create class="inline-form-grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>URL do endpoint<input name="url" type="url" required maxlength="2048" autocomplete="off" placeholder="https://…"></label>
+    <label>Descrição<input name="description" type="text" maxlength="200" autocomplete="off"></label>
+    <label class="toggle-inline"><input type="checkbox" name="enabled" value="1" checked> Ativo</label>
+    <fieldset class="webhook-events">
+      <legend>Eventos</legend>
+      {% for event in event_types %}
+      <label><input type="checkbox" name="event_types" value="{{ event }}"> {{ event }}</label>
+      {% endfor %}
+    </fieldset>
+    <button class="button" type="submit">Criar</button>
+    <p class="feedback-error" data-webhook-create-error hidden></p>
+  </form>
+  {% endif %}
+</section>
+
+<dialog id="webhook-secret-dialog" class="account-edit-dialog" aria-labelledby="webhook-secret-title">
+  <h3 id="webhook-secret-title">Segredo de assinatura</h3>
+  <p class="muted">Copie agora. O sistema não mostrará este segredo novamente.</p>
+  <code class="temporary-password" data-webhook-secret></code>
+  <div class="copy-input-row">
+    <input id="webhook-secret-value" type="text" value="" readonly aria-label="Segredo de assinatura">
+    <button class="copy-button" type="button" data-copy-input="webhook-secret-value" aria-label="Copiar segredo" title="Copiar segredo"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="5" y="5" width="8" height="9" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M11 5V3.4A1.4 1.4 0 0 0 9.6 2H3.4A1.4 1.4 0 0 0 2 3.4v6.2A1.4 1.4 0 0 0 3.4 11H5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg><span class="copy-feedback" aria-live="polite"></span></button>
+  </div>
+  <div class="dialog-actions"><button class="button button-small" type="button" data-webhook-secret-dismiss>Concluir</button></div>
+</dialog>
+<div id="toast" class="toast" role="alert" hidden></div>
+<span id="save-announcer" class="sr-only" aria-live="polite"></span>
+{% endblock %}
