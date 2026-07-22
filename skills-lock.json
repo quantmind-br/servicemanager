@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "dokploy-management": {
+      "source": "/home/diogo/dev/skills",
+      "sourceType": "local",
+      "computedHash": "63044df6473d7acd4b983a918bc877ff29af9d318645e21bc9f9088cb7dc8d45"
+    }
+  }
+}

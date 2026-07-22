@@ -1,0 +1,11 @@
+{
+    "schema_version": 2,
+    "commit": "a3adf4fe647da812b489cec0c3def1d409a30026",
+    "indexed_at": "2026-07-22T12:56:11Z",
+    "project": "home-diogo-dev-servicemanager",
+    "nodes": 1772,
+    "edges": 6497,
+    "original_size": 7536640,
+    "compressed_size": 1276246,
+    "compression_level": 3
+}
