@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Visão geral · Service Manager{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">Cobertura</p>
+  <h1>Visão geral entre serviços</h1>
+  <p class="muted">Compare status e cadastro de cada conta sem abrir serviço por serviço.</p>
+</section>
+
+<div class="coverage-controls">
+  <label>Exibir
+    <select id="coverage-filter">
+      <option value="">Todas</option>
+      <option value="none-registered">Não cadastrada em nenhum serviço</option>
+      <option value="multi-active">Ativa em mais de um serviço</option>
+    </select>
+  </label>
+  <span id="coverage-count" class="muted" aria-live="polite"></span>
+</div>
+
+<section class="panel accounts-panel">
+  <div class="table-wrap coverage-wrap">
+    <table class="coverage-table">
+      <thead><tr><th class="coverage-email">Conta</th>{% for service in services %}<th>{{ service['name'] }}</th>{% endfor %}</tr></thead>
+      <tbody>
+        {% for account in accounts %}
+        {% set agg = aggregates[account['id']] %}
+        <tr data-coverage-row data-reg-count="{{ agg.registered_count }}" data-active-count="{{ agg.active_count }}">
+          <th scope="row" class="coverage-email">{{ account['email'] }}</th>
+          {% for service in services %}
+          {% set cell = cells.get((account['id'], service['id'])) %}
+          <td>
+            {% if cell %}
+            <a href="{{ url_for('routes.index', service=service['id']) }}#row-{{ account['id'] }}" class="cov cov-{{ cell['status'] }}{% if cell['registered'] %} cov-reg{% endif %}" title="{{ service['name'] }}: {{ labels[cell['status']] }}{{ ', cadastrada' if cell['registered'] }}">{{ 'A' if cell['status'] == 'ativo' else ('I' if cell['status'] == 'inativo' else '·') }}</a>
+            {% else %}<span class="cov cov-missing" title="Sem vínculo">—</span>{% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% else %}
+        <tr><td colspan="{{ services|length + 1 }}"><p class="empty-state">Nenhuma conta cadastrada.</p></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

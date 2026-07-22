@@ -399,7 +399,7 @@ def change_password() -> Response:
 @require_role("admin")
 def users() -> Response:
     rows = get_db().execute("SELECT id, username, role, is_active, must_change_password FROM users ORDER BY username").fetchall()
-    return jsonify(users=[dict(row) for row in rows])
+    return Response(render_template("admin_users.html", users=rows), headers={"Cache-Control": "no-store, private"})
 
 
 def _request_value(name: str) -> Any:

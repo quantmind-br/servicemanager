@@ -535,6 +535,50 @@ table.accounts tbody td {
 .no-results td { text-align: center; padding: 2rem 1rem; }
 .no-results[hidden] { display: none; }
 
+/* ---------- Coverage matrix ---------- */
+.coverage-controls { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: .75rem; margin-bottom: 1rem; }
+.coverage-controls label { margin: 0; }
+.coverage-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.coverage-table th, .coverage-table td { padding: .55rem; text-align: center; border-bottom: 1px solid var(--border); }
+.coverage-table thead th { position: sticky; top: 0; z-index: 2; color: var(--muted); background: var(--bg-elev-2); font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; }
+.coverage-table .coverage-email { position: sticky; left: 0; z-index: 3; min-width: 14rem; max-width: 22rem; text-align: left; background: var(--bg-elev); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.coverage-table thead .coverage-email { background: var(--bg-elev-2); z-index: 4; }
+.cov { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-weight: 800; }
+.cov:hover { text-decoration: none; filter: brightness(1.18); }
+.cov-ativo { color: var(--green); background: var(--green-bg); border-color: var(--green-border); }
+.cov-nunca { color: var(--amber); background: var(--amber-bg); border-color: var(--amber-border); }
+.cov-inativo { color: var(--red); background: var(--red-bg); border-color: var(--red-border); }
+.cov-reg::after { content: ""; position: absolute; right: 3px; bottom: 3px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.cov-missing { opacity: .45; }
+
+/* ---------- Audit viewer ---------- */
+.audit-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .75rem; align-items: end; }
+.audit-filters label { margin: 0; }
+.audit-table { width: 100%; border-collapse: collapse; }
+.audit-table th, .audit-table td { text-align: left; padding: .65rem .75rem; border-bottom: 1px solid var(--border); vertical-align: top; white-space: nowrap; }
+.audit-table th { color: var(--muted); background: var(--bg-elev-2); font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; }
+.audit-metadata { max-width: 24rem; overflow: hidden; text-overflow: ellipsis; }
+.pagination { display: flex; justify-content: flex-end; gap: .5rem; padding: 1rem; }
+
+/* ---------- Bulk actions ---------- */
+.bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin-bottom: 1rem; padding: .75rem; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); }
+.bulk-bar[hidden] { display: none; }
+.bulk-bar label { display: flex; align-items: center; gap: .4rem; margin: 0; }
+.bulk-bar select { min-width: 9rem; }
+.cell-select { width: 2.75rem; min-width: 2.75rem; text-align: center; }
+.cell-select input { width: 1rem; height: 1rem; }
+
+/* ---------- User administration ---------- */
+.admin-users-table { width: 100%; border-collapse: collapse; }
+.admin-users-table th, .admin-users-table td { text-align: left; padding: .7rem .85rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.admin-users-table th { color: var(--muted); background: var(--bg-elev-2); font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+.admin-users-table select { min-width: 8rem; }
+.admin-users-table select:disabled, .admin-users-table input:disabled ~ .toggle-track { cursor: not-allowed; opacity: .55; }
+.admin-create-panel .inline-form-grid { align-items: end; margin-top: 1rem; }
+.admin-create-panel .button { align-self: end; min-height: 2.55rem; }
+.temporary-password { display: block; margin: .75rem 0; padding: .75rem; overflow-wrap: anywhere; color: var(--green); background: var(--green-bg); border: 1px solid var(--green-border); border-radius: var(--radius-sm); }
+.copy-input-row { display: flex; align-items: center; gap: .45rem; }
+.copy-input-row input { flex: 1 1 auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 /* ---------- Account edit dialog ---------- */
 .account-edit-dialog {
   background: var(--bg-elev);

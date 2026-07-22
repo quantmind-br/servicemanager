@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Auditoria · Service Manager{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">Administração</p>
+  <h1>Auditoria</h1>
+  {% if chain_healthy %}<span class="stat-dot dot-ativo">Cadeia íntegra</span>{% else %}<span class="stat-dot dot-inativo">Cadeia degradada</span>{% endif %}
+</section>
+
+<section class="panel">
+  <form method="get" action="{{ url_for('routes.audit_view') }}" class="audit-filters">
+    <label>Ação<input name="action" value="{{ filters.action }}" maxlength="100"></label>
+    <label>Tipo de alvo<input name="target_type" value="{{ filters.target_type }}" maxlength="100"></label>
+    <label>ID do usuário<input name="actor" type="number" min="1" value="{{ filters.actor }}"></label>
+    <label>Desde<input name="since" type="date" value="{{ filters.since }}"></label>
+    <label>Até<input name="until" type="date" value="{{ filters.until }}"></label>
+    <button class="button" type="submit">Filtrar</button>
+    <a class="button button-quiet" href="{{ url_for('routes.audit_csv', action=filters.action, target_type=filters.target_type, actor=filters.actor, since=filters.since, until=filters.until) }}">Exportar CSV</a>
+  </form>
+</section>
+
+<section class="panel accounts-panel">
+  <div class="panel-heading"><h2>Eventos</h2><p>Página {{ page }}</p></div>
+  <div class="table-wrap">
+    <table class="audit-table">
+      <thead><tr><th>ID</th><th>Data</th><th>Usuário</th><th>Ação</th><th>Alvo</th><th>Metadados</th><th>IP</th></tr></thead>
+      <tbody>
+        {% for event in events %}
+        <tr>
+          <td>{{ event['id'] }}</td>
+          <td>{{ event['occurred_at'] }}</td>
+          <td>{{ event['username'] or 'sistema' }}</td>
+          <td>{{ event['action'] }}</td>
+          <td>{{ event['target_type'] }}{% if event['target_id'] %}:{{ event['target_id'] }}{% endif %}</td>
+          <td class="audit-metadata" title="{{ event['metadata_json'] or '' }}">{{ event['metadata_json'] or '{}' }}</td>
+          <td>{{ event['source_ip'] or '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7"><p class="empty-state">Nenhum evento corresponde aos filtros.</p></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <nav class="pagination" aria-label="Paginação da auditoria">
+    {% if page > 1 %}<a class="button button-quiet" href="{{ url_for('routes.audit_view', page=page-1, action=filters.action, target_type=filters.target_type, actor=filters.actor, since=filters.since, until=filters.until) }}">Anterior</a>{% endif %}
+    {% if has_next %}<a class="button button-quiet" href="{{ url_for('routes.audit_view', page=page+1, action=filters.action, target_type=filters.target_type, actor=filters.actor, since=filters.since, until=filters.until) }}">Próxima</a>{% endif %}
+  </nav>
+</section>
+{% endblock %}

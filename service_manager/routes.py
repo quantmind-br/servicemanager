@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import csv
 import io
+from datetime import UTC, datetime
+from datetime import date, timedelta
+import re
 from collections import defaultdict
 import sqlite3
 
@@ -32,6 +35,8 @@ OK_MESSAGES = {
     "field_deleted": "Campo excluído.",
     "service_added": "Serviço criado.",
     "service_deleted": "Serviço excluído.",
+    "bulk_updated": "Contas atualizadas.",
+    "bulk_deleted": "Contas excluídas.",
 }
 TEMPLATE_ROWS = [
     ("email", "password", "status"),
@@ -99,6 +104,172 @@ def required_service_id() -> int:
     if service_id <= 0 or get_db().execute("SELECT 1 FROM services WHERE id=?", (service_id,)).fetchone() is None:
         abort(404)
     return service_id
+
+def required_query_service_id() -> int:
+    raw_candidate = request.args.get("service")
+    if raw_candidate is None:
+        abort(400)
+    try:
+        service_id = int(raw_candidate)
+    except (TypeError, ValueError):
+        abort(400)
+    if service_id <= 0:
+        abort(400)
+    if get_db().execute("SELECT 1 FROM services WHERE id=?", (service_id,)).fetchone() is None:
+        abort(404)
+    return service_id
+
+
+def _sanitize_cell(value: str) -> str:
+    return "'" + value if value[:1] in ("=", "+", "-", "@") else value
+
+
+def _export_rows(conn, service_id: int) -> list[tuple[str, str, str, str]]:
+    fields_by_account: dict[int, list[str]] = defaultdict(list)
+    for row in conn.execute(
+        """
+        SELECT value.account_id, field.name
+        FROM field_values AS value
+        JOIN custom_fields AS field ON field.id = value.field_id
+        WHERE field.service_id = ?
+        ORDER BY field.name
+        """,
+        (service_id,),
+    ):
+        fields_by_account[row["account_id"]].append(row["name"])
+    rows = conn.execute(
+        """
+        SELECT a.id, a.email, link.status, link.registered
+        FROM account_service AS link
+        JOIN accounts AS a ON a.id = link.account_id
+        WHERE link.service_id = ?
+        ORDER BY a.email COLLATE NOCASE
+        """,
+        (service_id,),
+    ).fetchall()
+    return [
+        (
+            _sanitize_cell(row["email"]),
+            _sanitize_cell(row["status"]),
+            "sim" if row["registered"] else "não",
+            _sanitize_cell("; ".join(fields_by_account[row["id"]])),
+        )
+        for row in rows
+    ]
+def _audit_query_filters() -> tuple[str, list[object], dict[str, str]]:
+    filters = {name: (request.args.get(name) or "").strip() for name in ("action", "target_type", "actor", "since", "until")}
+    clauses: list[str] = []
+    params: list[object] = []
+    if filters["action"]:
+        clauses.append("e.action = ?")
+        params.append(filters["action"])
+    if filters["target_type"]:
+        clauses.append("e.target_type = ?")
+        params.append(filters["target_type"])
+    if filters["actor"]:
+        try:
+            actor = int(filters["actor"])
+        except ValueError:
+            actor = 0
+        if actor > 0:
+            clauses.append("e.actor_user_id = ?")
+            params.append(actor)
+        else:
+            filters["actor"] = ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", filters["since"]):
+        try:
+            since = date.fromisoformat(filters["since"])
+        except ValueError:
+            filters["since"] = ""
+        else:
+            clauses.append("e.occurred_at >= ?")
+            params.append(since.isoformat())
+    else:
+        filters["since"] = ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", filters["until"]):
+        try:
+            until = date.fromisoformat(filters["until"])
+        except ValueError:
+            filters["until"] = ""
+        else:
+            clauses.append("e.occurred_at < ?")
+            params.append((until + timedelta(days=1)).isoformat())
+    else:
+        filters["until"] = ""
+    return (" WHERE " + " AND ".join(clauses) if clauses else "", params, filters)
+
+
+@routes.get("/admin/audit")
+@require_role("admin")
+def audit_view() -> Response:
+    conn = get_db()
+    try:
+        page = max(1, int(request.args.get("page", "1")))
+    except ValueError:
+        page = 1
+    where, params, filters = _audit_query_filters()
+    rows = conn.execute(
+        f"""
+        SELECT e.id, e.occurred_at, e.action, e.target_type, e.target_id, e.metadata_json, e.source_ip, u.username
+        FROM audit_events AS e
+        LEFT JOIN users AS u ON u.id = e.actor_user_id
+        {where}
+        ORDER BY e.id DESC
+        LIMIT 51 OFFSET ?
+        """,
+        (*params, (page - 1) * 50),
+    ).fetchall()
+    return Response(
+        render_template("audit.html", events=rows[:50], page=page, has_next=len(rows) > 50, filters=filters, chain_healthy=verify_audit_chain(conn)),
+        headers={"Cache-Control": "no-store, private"},
+    )
+
+
+@routes.get("/admin/audit.csv")
+@require_role("admin")
+def audit_csv() -> Response:
+    conn = get_db()
+    where, params, _ = _audit_query_filters()
+    rows = conn.execute(
+        f"""
+        SELECT e.id, e.occurred_at, u.username, e.action, e.target_type, e.target_id, e.metadata_json, e.source_ip
+        FROM audit_events AS e
+        LEFT JOIN users AS u ON u.id = e.actor_user_id
+        {where}
+        ORDER BY e.id DESC
+        LIMIT 10000
+        """,
+        params,
+    ).fetchall()
+    stream = io.StringIO()
+    writer = csv.writer(stream)
+    writer.writerow(("id", "occurred_at", "usuario", "action", "target_type", "target_id", "metadata_json", "source_ip"))
+    for row in rows:
+        writer.writerow(tuple(_sanitize_cell("" if value is None else str(value)) for value in row))
+    stamp = datetime.now(UTC).strftime("%Y%m%d")
+    return Response(
+        stream.getvalue().encode("utf-8-sig"),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=auditoria_{stamp}.csv"},
+    )
+
+
+
+@routes.get("/coverage")
+def coverage() -> Response:
+    conn = get_db()
+    services = conn.execute("SELECT id, name FROM services ORDER BY name").fetchall()
+    accounts = conn.execute("SELECT id, email FROM accounts ORDER BY email COLLATE NOCASE").fetchall()
+    links = conn.execute("SELECT account_id, service_id, status, registered FROM account_service").fetchall()
+    cells = {(row["account_id"], row["service_id"]): {"status": row["status"], "registered": bool(row["registered"])} for row in links}
+    aggregates = {}
+    for account in accounts:
+        account_cells = [cells.get((account["id"], service["id"])) for service in services]
+        aggregates[account["id"]] = {
+            "registered_count": sum(1 for cell in account_cells if cell and cell["registered"]),
+            "active_count": sum(1 for cell in account_cells if cell and cell["status"] == "ativo"),
+        }
+    return Response(render_template("coverage.html", services=services, accounts=accounts, cells=cells, aggregates=aggregates, labels=STATUS_LABELS), headers={"Cache-Control": "no-store, private"})
 
 
 def encrypted_account_password(account_id: int, password: str) -> tuple[bytes, bytes, int]:
@@ -267,6 +438,49 @@ def template_xlsx() -> Response:
     workbook.save(stream)
     return Response(stream.getvalue(), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": "attachment; filename=modelo_credenciais.xlsx"})
 
+@routes.get("/export.csv")
+@require_role("admin")
+def export_csv() -> Response:
+    conn = get_db()
+    service_id = required_query_service_id()
+    rows = _export_rows(conn, service_id)
+    stream = io.StringIO()
+    csv.writer(stream).writerows([("email", "status", "cadastrada", "campos"), *rows])
+    with transaction(conn):
+        _audit(conn, action="accounts.exported", target_type="service", target_id=service_id, metadata={"rows": len(rows), "format": "csv"})
+    stamp = datetime.now(UTC).strftime("%Y%m%d")
+    return Response(
+        stream.getvalue().encode("utf-8-sig"),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=contas_{service_id}_{stamp}.csv"},
+    )
+
+
+@routes.get("/export.xlsx")
+@require_role("admin")
+def export_xlsx() -> Response:
+    from openpyxl import Workbook
+
+    conn = get_db()
+    service_id = required_query_service_id()
+    rows = _export_rows(conn, service_id)
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.append(("email", "status", "cadastrada", "campos"))
+    for row in rows:
+        worksheet.append(row)
+    stream = io.BytesIO()
+    workbook.save(stream)
+    with transaction(conn):
+        _audit(conn, action="accounts.exported", target_type="service", target_id=service_id, metadata={"rows": len(rows), "format": "xlsx"})
+    stamp = datetime.now(UTC).strftime("%Y%m%d")
+    return Response(
+        stream.getvalue(),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=contas_{service_id}_{stamp}.xlsx"},
+    )
+
+
 
 @routes.post("/import")
 @require_role("admin")
@@ -371,6 +585,78 @@ def update_registered(item_id: int) -> Response:
         conn.execute("UPDATE account_service SET registered=? WHERE account_id=? AND service_id=?", (registered, item_id, service_id))
         _audit(conn, action="account.registered_updated", target_type="account", target_id=item_id, metadata={"service_id": service_id, "registered": registered})
     return redirect(url_for("routes.index", service=service_id, ok="registered_updated"))
+
+def _bulk_account_ids() -> list[int] | Response:
+    raw_ids = request.form.getlist("account_ids")
+    try:
+        account_ids = [int(raw) for raw in raw_ids]
+    except (TypeError, ValueError):
+        return _form_error("Seleção inválida")
+    if not account_ids or len(account_ids) > 200 or any(account_id <= 0 for account_id in account_ids):
+        return _form_error("Seleção inválida")
+    return list(dict.fromkeys(account_ids))
+
+
+@routes.post("/accounts/bulk/status")
+def bulk_status() -> Response:
+    conn = get_db()
+    service_id = required_service_id()
+    account_ids = _bulk_account_ids()
+    if isinstance(account_ids, Response):
+        return account_ids
+    status = normalize_status(request.form.get("status"))
+    if status is None:
+        return _form_error("Status inválido")
+    placeholders = ",".join("?" for _ in account_ids)
+    with transaction(conn):
+        for account_id in account_ids:
+            _related_account(conn, service_id, account_id)
+        conn.execute(
+            f"UPDATE account_service SET status=? WHERE service_id=? AND account_id IN ({placeholders})",
+            (status, service_id, *account_ids),
+        )
+        _audit(conn, action="accounts.bulk_status", target_type="service", target_id=service_id, metadata={"count": len(account_ids), "status": status})
+    return redirect(url_for("routes.index", service=service_id, ok="bulk_updated"))
+
+
+@routes.post("/accounts/bulk/registered")
+def bulk_registered() -> Response:
+    conn = get_db()
+    service_id = required_service_id()
+    account_ids = _bulk_account_ids()
+    if isinstance(account_ids, Response):
+        return account_ids
+    raw = request.form.get("registered", "")
+    if raw not in {"0", "1"}:
+        return _form_error("Cadastro inválido")
+    registered = int(raw)
+    placeholders = ",".join("?" for _ in account_ids)
+    with transaction(conn):
+        for account_id in account_ids:
+            _related_account(conn, service_id, account_id)
+        conn.execute(
+            f"UPDATE account_service SET registered=? WHERE service_id=? AND account_id IN ({placeholders})",
+            (registered, service_id, *account_ids),
+        )
+        _audit(conn, action="accounts.bulk_registered", target_type="service", target_id=service_id, metadata={"count": len(account_ids), "registered": registered})
+    return redirect(url_for("routes.index", service=service_id, ok="bulk_updated"))
+
+
+@routes.post("/accounts/bulk/delete")
+@require_role("admin")
+def bulk_delete() -> Response:
+    conn = get_db()
+    service_id = required_service_id()
+    account_ids = _bulk_account_ids()
+    if isinstance(account_ids, Response):
+        return account_ids
+    placeholders = ",".join("?" for _ in account_ids)
+    with transaction(conn):
+        for account_id in account_ids:
+            _related_account(conn, service_id, account_id)
+        conn.execute(f"DELETE FROM accounts WHERE id IN ({placeholders})", account_ids)
+        _audit(conn, action="accounts.bulk_deleted", target_type="service", target_id=service_id, metadata={"count": len(account_ids), "service_id": service_id})
+    return redirect(url_for("routes.index", service=service_id, ok="bulk_deleted"))
 
 @routes.post("/delete/<int:item_id>")
 @require_role("admin")

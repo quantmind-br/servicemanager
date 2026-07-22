@@ -16,6 +16,11 @@
     {% if g.current_user %}
     <span class="muted header-user">{{ g.current_user['username'] }}{% if g.current_user['role'] == 'admin' %} · admin{% endif %}</span>
     <div class="header-actions">
+      {% if g.current_user['role'] == 'admin' %}
+      <a class="button button-quiet" href="{{ url_for('auth.users') }}">Usuários</a>
+      <a class="button button-quiet" href="{{ url_for('routes.audit_view') }}">Auditoria</a>
+      {% endif %}
+      <a class="button button-quiet" href="{{ url_for('routes.coverage') }}">Visão geral</a>
       <a class="button button-quiet" href="{{ url_for('auth.account') }}">Minha conta</a>
       <form class="logout-form" method="post" action="{{ url_for('auth.logout') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

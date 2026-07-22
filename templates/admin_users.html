@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Usuários · Service Manager{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">Administração</p>
+  <h1>Usuários</h1>
+  <p class="muted">Crie acessos e ajuste permissões sem sair desta página.</p>
+</section>
+
+<section class="panel">
+  <div class="panel-heading">
+    <h2>Contas de acesso</h2>
+    <p>{{ users|length }} usuários</p>
+  </div>
+  <div class="table-wrap">
+    <table class="admin-users-table">
+      <thead>
+        <tr><th scope="col">Login</th><th scope="col">Papel</th><th scope="col">Ativo</th><th scope="col">Troca de senha pendente</th><th scope="col">Ações</th></tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        {% set is_self = u['id'] == g.current_user['id'] %}
+        <tr>
+          <td><strong>{{ u['username'] }}</strong>{% if is_self %} <span class="muted-hint">você</span>{% endif %}</td>
+          <td>
+            <select data-admin-role data-user-id="{{ u['id'] }}" aria-label="Papel de {{ u['username'] }}"{% if is_self %} disabled title="Você não pode alterar seu próprio papel por esta tela."{% endif %}>
+              <option value="admin"{% if u['role'] == 'admin' %} selected{% endif %}>Admin</option>
+              <option value="operador"{% if u['role'] == 'operador' %} selected{% endif %}>Operador</option>
+            </select>
+          </td>
+          <td>
+            <label class="toggle">
+              <input type="checkbox" data-admin-active data-user-id="{{ u['id'] }}"{% if u['is_active'] %} checked{% endif %}{% if is_self %} disabled title="Você não pode desativar seu próprio acesso por esta tela."{% endif %} aria-label="Acesso ativo de {{ u['username'] }}">
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </label>
+          </td>
+          <td>{{ "Sim" if u['must_change_password'] else "Não" }}</td>
+          <td class="muted-hint">{% if is_self %}Protegido nesta tela{% else %}Alterações salvas automaticamente{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel admin-create-panel">
+  <div class="panel-heading"><h2>Criar usuário</h2><p>A senha temporária aparece uma única vez.</p></div>
+  <form method="post" action="{{ url_for('auth.create_user') }}" data-admin-create class="inline-form-grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Login<input name="username" type="text" autocomplete="off" required minlength="3" maxlength="64"></label>
+    <label>Papel<select name="role"><option value="operador">Operador</option><option value="admin">Admin</option></select></label>
+    <button class="button" type="submit">Criar</button>
+  </form>
+</section>
+
+<dialog id="temp-password-dialog" class="account-edit-dialog" aria-labelledby="temp-password-title">
+  <h3 id="temp-password-title">Senha temporária</h3>
+  <p class="muted">Copie agora. O sistema não mostrará esta senha novamente.</p>
+  <code class="temporary-password" data-temp-password></code>
+  <div class="copy-input-row">
+    <input id="temp-password-value" type="text" value="" readonly aria-label="Senha temporária">
+    <button class="copy-button" type="button" data-copy-input="temp-password-value" aria-label="Copiar senha temporária" title="Copiar senha temporária"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="5" y="5" width="8" height="9" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M11 5V3.4A1.4 1.4 0 0 0 9.6 2H3.4A1.4 1.4 0 0 0 2 3.4v6.2A1.4 1.4 0 0 0 3.4 11H5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg><span class="copy-feedback" aria-live="polite"></span></button>
+  </div>
+  <div class="dialog-actions"><button class="button button-small" type="button" data-temp-dismiss>Concluir</button></div>
+</dialog>
+<div id="toast" class="toast" role="alert" hidden></div>
+<span id="save-announcer" class="sr-only" aria-live="polite"></span>
+{% endblock %}

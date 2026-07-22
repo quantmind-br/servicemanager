@@ -17,7 +17,15 @@
     if (event.target instanceof HTMLFormElement) syncCsrfFields(event.target);
   }, true);
 
-  const toast = document.getElementById("toast");
+  const toast = document.getElementById("toast") || (() => {
+    const element = document.createElement("div");
+    element.id = "toast";
+    element.className = "toast";
+    element.setAttribute("role", "alert");
+    element.hidden = true;
+    document.body.append(element);
+    return element;
+  })();
   let toastTimer = 0;
   const showToast = (message, kind = "error") => {
     if (!toast) return;
@@ -28,7 +36,14 @@
     toastTimer = window.setTimeout(() => { toast.hidden = true; }, 5000);
   };
 
-  const saveAnnouncer = document.getElementById("save-announcer");
+  const saveAnnouncer = document.getElementById("save-announcer") || (() => {
+    const element = document.createElement("span");
+    element.id = "save-announcer";
+    element.className = "sr-only";
+    element.setAttribute("aria-live", "polite");
+    document.body.append(element);
+    return element;
+  })();
   const announceSave = (message) => {
     if (!saveAnnouncer) return;
     saveAnnouncer.textContent = "";
@@ -310,10 +325,35 @@
 
   let refreshFilter = () => {};
   let refreshStatusLabel = () => {};
+  let refreshBulkSelection = () => {};
   const filterInput = document.getElementById("account-filter");
   const statusFilter = document.getElementById("filter-status");
   const registeredFilter = document.getElementById("filter-registered");
   const accountsTbody = document.querySelector("table.accounts tbody");
+  let filterUrlTimer = 0;
+  const syncUrlState = () => {
+    const url = new URL(window.location.href);
+    const values = {
+      q: (filterInput?.value || "").trim(),
+      st: statusFilter?.value || "",
+      reg: registeredFilter?.value || "",
+    };
+    for (const [key, value] of Object.entries(values)) {
+      if (value) url.searchParams.set(key, value);
+      else url.searchParams.delete(key);
+    }
+    const sorted = document.querySelector('th[data-sort-col][aria-sort]:not([aria-sort="none"])');
+    const sortButton = sorted?.querySelector(".th-sort");
+    if (sortButton?.dataset.sort) {
+      url.searchParams.set("sort", sortButton.dataset.sort);
+      url.searchParams.set("dir", sorted.getAttribute("aria-sort") === "descending" ? "desc" : "asc");
+    } else {
+      url.searchParams.delete("sort");
+      url.searchParams.delete("dir");
+    }
+    window.history.replaceState(null, "", url);
+  };
+
   if (accountsTbody && (filterInput || statusFilter || registeredFilter)) {
     const rowInfo = Array.from(accountsTbody.querySelectorAll("tr[data-row]")).map((tr) => ({
       tr,
@@ -323,7 +363,7 @@
     }));
     const infoByRow = new Map(rowInfo.map((info) => [info.tr, info]));
     const noResults = accountsTbody.querySelector("tr.no-results");
-    const applyFilter = () => {
+    const applyFilter = (urlDelay = 0) => {
       const query = normalize((filterInput?.value || "").trim());
       const status = statusFilter?.value || "";
       const registered = registeredFilter?.value || "";
@@ -344,21 +384,28 @@
       if (countEl) countEl.textContent = active ? `Exibindo ${visible} de ${rowInfo.length} contas` : "";
       const clearButton = document.getElementById("filter-clear");
       if (clearButton) clearButton.hidden = !active;
+      refreshBulkSelection();
+      window.clearTimeout(filterUrlTimer);
+      filterUrlTimer = window.setTimeout(syncUrlState, urlDelay);
     };
     refreshFilter = applyFilter;
     refreshStatusLabel = (tr) => {
       const info = infoByRow.get(tr);
       if (info) info.statusLabel = normalize(tr.querySelector(".status-badge")?.selectedOptions[0]?.textContent || "");
     };
-    filterInput?.addEventListener("input", applyFilter);
-    statusFilter?.addEventListener("change", applyFilter);
-    registeredFilter?.addEventListener("change", applyFilter);
+    filterInput?.addEventListener("input", () => applyFilter(300));
+    statusFilter?.addEventListener("change", () => applyFilter());
+    registeredFilter?.addEventListener("change", () => applyFilter());
     document.getElementById("filter-clear")?.addEventListener("click", () => {
       if (filterInput) filterInput.value = "";
       if (statusFilter) statusFilter.value = "";
       if (registeredFilter) registeredFilter.value = "";
       applyFilter();
     });
+    const initialParams = new URLSearchParams(window.location.search);
+    if (filterInput) filterInput.value = initialParams.get("q") || "";
+    if (statusFilter && Array.from(statusFilter.options).some((option) => option.value === initialParams.get("st"))) statusFilter.value = initialParams.get("st") || "";
+    if (registeredFilter && Array.from(registeredFilter.options).some((option) => option.value === initialParams.get("reg"))) registeredFilter.value = initialParams.get("reg") || "";
     applyFilter();
   }
 
@@ -388,8 +435,98 @@
         const detail = document.getElementById("detail-" + tr.dataset.id);
         if (detail) tbody.insertBefore(detail, anchor);
       }
+      syncUrlState();
     });
   });
+
+  const initialSortParams = new URLSearchParams(window.location.search);
+  const initialSort = initialSortParams.get("sort");
+  const initialDir = initialSortParams.get("dir");
+  if (["email", "status"].includes(initialSort)) {
+    const button = document.querySelector(`.th-sort[data-sort="${initialSort}"]`);
+    button?.click();
+    if (initialDir === "desc") button?.click();
+  }
+
+  document.getElementById("share-view")?.addEventListener("click", async () => {
+    syncUrlState();
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      showToast("Link copiado.", "success");
+    } catch {
+      showToast("Não foi possível copiar.");
+    }
+  });
+
+  // ===== Bulk selection and submissions.
+  const selectedAccountIds = new Set();
+  const rowSelects = Array.from(document.querySelectorAll("[data-row-select]"));
+  const selectVisible = document.getElementById("select-visible");
+  const bulkBar = document.getElementById("bulk-bar");
+  const bulkCount = document.getElementById("bulk-count");
+  const updateBulkUi = () => {
+    const selected = rowSelects.filter((control) => selectedAccountIds.has(control.value));
+    if (bulkBar) bulkBar.hidden = selected.length === 0;
+    if (bulkCount) bulkCount.textContent = `${selected.length} selecionadas`;
+    for (const control of rowSelects) control.checked = selectedAccountIds.has(control.value);
+    const visibleControls = rowSelects.filter((control) => !control.closest("tr[data-row]")?.hidden);
+    if (selectVisible) {
+      selectVisible.checked = visibleControls.length > 0 && visibleControls.every((control) => selectedAccountIds.has(control.value));
+      selectVisible.indeterminate = visibleControls.some((control) => selectedAccountIds.has(control.value)) && !selectVisible.checked;
+    }
+  };
+  refreshBulkSelection = () => {
+    for (const control of rowSelects) {
+      if (control.closest("tr[data-row]")?.hidden) selectedAccountIds.delete(control.value);
+    }
+    updateBulkUi();
+  };
+  rowSelects.forEach((control) => {
+    control.addEventListener("change", () => {
+      if (control.checked) selectedAccountIds.add(control.value);
+      else selectedAccountIds.delete(control.value);
+      updateBulkUi();
+    });
+  });
+  selectVisible?.addEventListener("change", () => {
+    for (const control of rowSelects) {
+      if (control.closest("tr[data-row]")?.hidden) continue;
+      if (selectVisible.checked) selectedAccountIds.add(control.value);
+      else selectedAccountIds.delete(control.value);
+    }
+    updateBulkUi();
+  });
+  const submitBulk = (action, extra = {}) => {
+    if (!selectedAccountIds.size) return;
+    const serviceId = document.querySelector('input[name="service_id"]')?.value;
+    if (!serviceId) return;
+    const form = document.createElement("form");
+    form.method = "post";
+    form.action = action;
+    const fields = { csrf_token: csrfToken, service_id: serviceId, ...extra };
+    for (const [name, value] of Object.entries(fields)) {
+      const input = document.createElement("input");
+      input.type = "hidden"; input.name = name; input.value = value;
+      form.append(input);
+    }
+    for (const accountId of selectedAccountIds) {
+      const input = document.createElement("input");
+      input.type = "hidden"; input.name = "account_ids"; input.value = accountId;
+      form.append(input);
+    }
+    document.body.append(form);
+    form.submit();
+  };
+  document.getElementById("bulk-apply-status")?.addEventListener("click", () => {
+    submitBulk("/accounts/bulk/status", { status: document.getElementById("bulk-status")?.value || "" });
+  });
+  document.getElementById("bulk-registered-on")?.addEventListener("click", () => submitBulk("/accounts/bulk/registered", { registered: "1" }));
+  document.getElementById("bulk-registered-off")?.addEventListener("click", () => submitBulk("/accounts/bulk/registered", { registered: "0" }));
+  document.getElementById("bulk-delete")?.addEventListener("click", async () => {
+    const count = selectedAccountIds.size;
+    if (await askConfirm(`Excluir ${count} contas? Esta ação não pode ser desfeita.`)) submitBulk("/accounts/bulk/delete");
+  });
+  updateBulkUi();
 
   // ===== Row expansion: [data-expand] toggles the paired detail row.
   document.querySelectorAll("[data-expand]").forEach((button) => {
@@ -503,5 +640,177 @@
       if (!isError) window.setTimeout(() => { feedbackBanner.hidden = true; }, 6000);
     }
   }
+
+
+  // ===== Reauthentication: preserve a safe local return path after the
+  // server's pinned 204 response.
+  const reauthForm = document.querySelector('form[action$="/reauth"]');
+  reauthForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const button = reauthForm.querySelector('button[type="submit"]');
+    const label = button?.textContent || "Confirmar";
+    if (button) { button.disabled = true; button.textContent = "Enviando…"; }
+    try {
+      const response = await fetch(reauthForm.action, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRFToken": csrfToken },
+        body: new URLSearchParams(new FormData(reauthForm)),
+      });
+      if (response.redirected && new URL(response.url).pathname === "/login") {
+        window.location.assign(response.url);
+        return;
+      }
+      if (response.status === 204) {
+        const next = new URLSearchParams(window.location.search).get("next") || "/";
+        window.location.assign(next.startsWith("/") && !next.startsWith("//") ? next : "/");
+        return;
+      }
+      if (response.status === 401) showToast("Credenciais inválidas.");
+      else if (response.status === 429) showToast("Muitas tentativas. Aguarde alguns minutos.");
+      else showToast("Não foi possível confirmar sua identidade.");
+    } catch {
+      showToast("Não foi possível confirmar sua identidade.");
+    } finally {
+      if (button) { button.disabled = false; button.textContent = label; }
+    }
+  });
+
+  // ===== User administration.
+  const adminFetch = async (url, body) => {
+    const response = await fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRFToken": csrfToken },
+      body,
+    });
+    if (response.redirected && new URL(response.url).pathname === "/login") {
+      window.location.assign(response.url);
+      return null;
+    }
+    if (response.status === 403) {
+      window.location.assign("/reauth?next=" + encodeURIComponent(window.location.pathname + window.location.search + window.location.hash));
+      return null;
+    }
+    return response;
+  };
+
+  document.querySelectorAll("[data-admin-role]").forEach((select) => {
+    select.dataset.prev = select.value;
+    select.addEventListener("change", async () => {
+      const previous = select.dataset.prev;
+      select.disabled = true;
+      try {
+        const response = await adminFetch(`/admin/users/${select.dataset.userId}/role`, new URLSearchParams({ role: select.value }));
+        if (!response) return;
+        if (response.status === 204) {
+          select.dataset.prev = select.value;
+          announceSave("Papel atualizado.");
+        } else if (response.status === 400) {
+          showToast((await response.text()) || "Papel inválido.");
+          select.value = previous;
+        } else {
+          throw new Error("admin role failed");
+        }
+      } catch {
+        select.value = previous;
+        showToast("Não foi possível atualizar o papel.");
+      } finally {
+        select.disabled = false;
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-admin-active]").forEach((control) => {
+    control.dataset.prev = control.checked ? "1" : "0";
+    control.addEventListener("change", async () => {
+      const previous = control.dataset.prev;
+      control.disabled = true;
+      try {
+        const response = await adminFetch(`/admin/users/${control.dataset.userId}/active`, new URLSearchParams({ is_active: control.checked ? "1" : "0" }));
+        if (!response) return;
+        if (response.status === 204) {
+          control.dataset.prev = control.checked ? "1" : "0";
+          announceSave("Acesso atualizado.");
+        } else if (response.status === 400) {
+          showToast((await response.text()) || "Alteração inválida.");
+          control.checked = previous === "1";
+        } else {
+          throw new Error("admin active failed");
+        }
+      } catch {
+        control.checked = previous === "1";
+        showToast("Não foi possível atualizar o acesso.");
+      } finally {
+        control.disabled = false;
+      }
+    });
+  });
+
+  const adminCreateForm = document.querySelector("[data-admin-create]");
+  const tempPasswordDialog = document.getElementById("temp-password-dialog");
+  adminCreateForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const button = adminCreateForm.querySelector('button[type="submit"]');
+    const label = button?.textContent || "Criar";
+    if (button) { button.disabled = true; button.textContent = "Enviando…"; }
+    try {
+      const response = await adminFetch(adminCreateForm.action, new URLSearchParams(new FormData(adminCreateForm)));
+      if (!response) return;
+      if (response.status === 201) {
+        const payload = await response.json();
+        const input = document.getElementById("temp-password-value");
+        const code = tempPasswordDialog?.querySelector("[data-temp-password]");
+        if (input) input.value = payload.temporary_password || "";
+        if (code) code.textContent = payload.temporary_password || "";
+        tempPasswordDialog?.showModal();
+      } else if (response.status === 409) {
+        showToast("Login indisponível.");
+      } else if (response.status === 400) {
+        showToast("Usuário inválido.");
+      } else {
+        throw new Error("admin create failed");
+      }
+    } catch {
+      showToast("Não foi possível criar o usuário.");
+    } finally {
+      if (button) { button.disabled = false; button.textContent = label; }
+    }
+  });
+
+  const dismissTempPassword = () => {
+    if (!tempPasswordDialog) return;
+    const input = document.getElementById("temp-password-value");
+    const code = tempPasswordDialog.querySelector("[data-temp-password]");
+    if (input) input.value = "";
+    if (code) code.textContent = "";
+    if (tempPasswordDialog.open) tempPasswordDialog.close();
+    window.location.reload();
+  };
+  tempPasswordDialog?.querySelector("[data-temp-dismiss]")?.addEventListener("click", dismissTempPassword);
+  tempPasswordDialog?.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    dismissTempPassword();
+  });
+  // ===== Coverage matrix filtering.
+  const coverageFilter = document.getElementById("coverage-filter");
+  const coverageRows = Array.from(document.querySelectorAll("[data-coverage-row]"));
+  const applyCoverageFilter = () => {
+    const filter = coverageFilter?.value || "";
+    let visible = 0;
+    for (const row of coverageRows) {
+      const show = !filter ||
+        (filter === "none-registered" && Number(row.dataset.regCount) === 0) ||
+        (filter === "multi-active" && Number(row.dataset.activeCount) > 1);
+      row.hidden = !show;
+      if (show) visible += 1;
+    }
+    const count = document.getElementById("coverage-count");
+    if (count) count.textContent = `Exibindo ${visible} de ${coverageRows.length} contas`;
+  };
+  coverageFilter?.addEventListener("change", applyCoverageFilter);
+  if (coverageFilter) applyCoverageFilter();
 
 })();
