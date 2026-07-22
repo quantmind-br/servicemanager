@@ -1348,6 +1348,54 @@ def test_registered_column_migration_preserves_every_value_and_rejects_migrated_
         migration.migrate(target, tmp_path / "again.db", "AUDIT_KEY_V1")
 
 
+def test_service_index_migration_adds_index_preserves_data_and_rejects_migrated_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from service_manager.db import SCHEMA, schema_is_current
+
+    index_line = "CREATE INDEX account_service_service_id ON account_service(service_id);"
+    assert index_line in SCHEMA
+    source = tmp_path / "pre-index.db"
+    conn = sqlite3.connect(source)
+    try:
+        conn.executescript(SCHEMA.replace(index_line, ""))
+        conn.execute("INSERT INTO services (id, name) VALUES (9, 'Synthetic service')")
+        conn.execute("INSERT INTO accounts (id, email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, ?, ?)", (41, "service@example.test", b"password-ciphertext", b"p" * 12, 1))
+        conn.execute("INSERT INTO account_service (account_id, service_id, status, registered) VALUES (41, 9, 'ativo', 1)")
+        conn.execute("INSERT INTO users (id, username, password_hash, role, is_active, must_change_password, created_at, updated_at, session_version) VALUES (1, 'admin', 'hash', 'admin', 1, 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 0)")
+        _append_synthetic_audit_events(conn, count=3)
+        for table, seq in {"accounts": 41, "services": 9, "users": 1, "audit_events": 3}.items():
+            conn.execute("UPDATE sqlite_sequence SET seq = ? WHERE name = ?", (seq, table))
+        conn.commit()
+    finally:
+        conn.close()
+    os.chmod(source, 0o600)
+    source_bytes = source.read_bytes()
+    target = tmp_path / "with-index.db"
+
+    migration = _script_module("migrate_service_index")
+    monkeypatch.setenv("AUDIT_KEY_V1", DATA_KEY)
+    migration.migrate(source, target, "AUDIT_KEY_V1")
+
+    assert source.read_bytes() == source_bytes
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    src_conn = sqlite3.connect(source)
+    dst_conn = sqlite3.connect(target)
+    dst_conn.row_factory = sqlite3.Row
+    try:
+        assert dst_conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='account_service_service_id'").fetchone()[0] == 1
+        assert schema_is_current(dst_conn)
+        for table in ("services", "accounts", "account_service", "custom_fields", "field_values", "users", "security_events", "audit_events"):
+            assert _table_rows(dst_conn, table) == _table_rows(src_conn, table)
+        from _secure_db import load_key
+        from service_manager.audit import verify_audit_chain_with_key
+        assert verify_audit_chain_with_key(dst_conn, load_key("AUDIT_KEY_V1"))
+    finally:
+        src_conn.close()
+        dst_conn.close()
+
+    with pytest.raises(migration.ScriptError, match="source schema is incompatible"):
+        migration.migrate(target, tmp_path / "again.db", "AUDIT_KEY_V1")
+
+
 def _pre_cutover_source(path: Path, data_key: bytes) -> None:
     """Build a pre-cutover database: registered + is_secret + mixed field representations + triggers."""
     migration = _script_module("migrate_unclassified_fields")

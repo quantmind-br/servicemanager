@@ -273,6 +273,22 @@ def test_audit_chain_rejects_a_gap_in_event_ids(app):
         assert not verify_audit_chain()
 
 
+def test_tampering_behind_watermark_is_caught_by_scheduled_full_walk(app, monkeypatch):
+    from service_manager import audit as audit_module
+    with app.app_context():
+        conn = get_db()
+        with transaction(conn):
+            append_audit_event(conn, action="first", target_type="test")
+            append_audit_event(conn, action="second", target_type="test")
+        assert verify_audit_chain()          # advances watermark past both rows
+        conn.execute("DROP TRIGGER audit_events_no_update")
+        conn.execute("UPDATE audit_events SET action='tampered' WHERE action='first'")
+        conn.commit()
+        assert verify_audit_chain()          # inside the window: documents the bounded blind spot
+        monkeypatch.setattr(audit_module, "_FULL_WALK_INTERVAL_SECONDS", 0.0)
+        assert not verify_audit_chain()      # scheduled full walk catches it
+
+
 def test_split_account_routes_preserve_blank_secret_and_isolate_status(app, client):
     _, service_id = authenticated_operator(app, client)
     created = client.post(

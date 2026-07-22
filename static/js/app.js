@@ -309,6 +309,7 @@
   };
 
   let refreshFilter = () => {};
+  let refreshStatusLabel = () => {};
   const filterInput = document.getElementById("account-filter");
   const statusFilter = document.getElementById("filter-status");
   const registeredFilter = document.getElementById("filter-registered");
@@ -317,8 +318,10 @@
     const rowInfo = Array.from(accountsTbody.querySelectorAll("tr[data-row]")).map((tr) => ({
       tr,
       search: normalize(tr.dataset.search || ""),
+      statusLabel: normalize(tr.querySelector(".status-badge")?.selectedOptions[0]?.textContent || ""),
       detail: document.getElementById("detail-" + tr.dataset.id),
     }));
+    const infoByRow = new Map(rowInfo.map((info) => [info.tr, info]));
     const noResults = accountsTbody.querySelector("tr.no-results");
     const applyFilter = () => {
       const query = normalize((filterInput?.value || "").trim());
@@ -326,8 +329,7 @@
       const registered = registeredFilter?.value || "";
       let visible = 0;
       for (const info of rowInfo) {
-        const statusOption = info.tr.querySelector(".status-badge")?.selectedOptions[0]?.textContent || "";
-        const haystack = info.search + " " + normalize(statusOption);
+        const haystack = info.search + " " + info.statusLabel;
         const show =
           subsequenceMatch(query, haystack) &&
           (!status || info.tr.dataset.status === status) &&
@@ -344,6 +346,10 @@
       if (clearButton) clearButton.hidden = !active;
     };
     refreshFilter = applyFilter;
+    refreshStatusLabel = (tr) => {
+      const info = infoByRow.get(tr);
+      if (info) info.statusLabel = normalize(tr.querySelector(".status-badge")?.selectedOptions[0]?.textContent || "");
+    };
     filterInput?.addEventListener("input", applyFilter);
     statusFilter?.addEventListener("change", applyFilter);
     registeredFilter?.addEventListener("change", applyFilter);
@@ -454,6 +460,7 @@
           const label = control.selectedOptions[0]?.textContent || value;
           const copyButton = form.querySelector("[data-copy-value]");
           if (copyButton) copyButton.dataset.copyValue = label;
+          refreshStatusLabel(row);
           refreshFilter();
           announceSave("Status salvo.");
         } else if (control.name === "registered" && row) {

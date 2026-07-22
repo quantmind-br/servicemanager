@@ -19,11 +19,6 @@ from service_manager.authorization import require_role
 routes = Blueprint("routes", __name__)
 
 
-@routes.before_request
-def guard_sensitive_route_mutations() -> None:
-    if request.method != "GET":
-        _require_audit_chain()
-
 STATUS_ORDER = {"ativo": 0, "nunca": 1, "inativo": 2}
 STATUS_LABELS = {"ativo": "Ativo", "nunca": "Nunca teve", "inativo": "Teve, mas inativo"}
 OK_MESSAGES = {
@@ -72,13 +67,6 @@ def _audit(conn, *, action: str, target_type: str, target_id: int | str | None =
     return append_audit_event(conn, action=action, target_type=target_type, target_id=target_id, actor_user_id=_audit_actor(), metadata=metadata)
 
 
-def _require_audit_chain() -> None:
-    healthy = verify_audit_chain()
-    current_app.config["AUDIT_CHAIN_HEALTHY"] = healthy
-    if not healthy:
-        abort(503)
-
-
 def _form_error(message: str, *, status: int = 400) -> Response:
     if request.headers.get("Accept", "").startswith("application/json"):
         response = jsonify(error=message)
@@ -87,9 +75,7 @@ def _form_error(message: str, *, status: int = 400) -> Response:
     return Response(render_template("form_error.html", message=message), status=status, mimetype="text/html")
 
 
-def selected_service_id() -> int | None:
-    conn = get_db()
-    services = conn.execute("SELECT id FROM services ORDER BY name").fetchall()
+def selected_service_id(services: list) -> int | None:
     raw_candidate = request.values.get("service") or request.values.get("service_id")
     if raw_candidate is None:
         return services[0]["id"] if services else None
@@ -97,7 +83,7 @@ def selected_service_id() -> int | None:
         candidate = int(raw_candidate)
     except (TypeError, ValueError):
         abort(404)
-    if candidate <= 0 or candidate not in {service["id"] for service in services}:
+    if candidate <= 0 or not any(service["id"] == candidate for service in services):
         abort(404)
     return candidate
 
@@ -139,15 +125,15 @@ def _related_field_account(conn, service_id: int | None, field_id: int, account_
 
 
 def link_all_services(conn, account_id: int, active_service_id: int, status: str, registered: int = 0) -> None:
-    for service in conn.execute("SELECT id FROM services"):
-        conn.execute(
-            """
-            INSERT INTO account_service (account_id, service_id, status, registered)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(account_id, service_id) DO UPDATE SET status = excluded.status, registered = excluded.registered
-            """,
-            (account_id, service["id"], status if service["id"] == active_service_id else "nunca", registered if service["id"] == active_service_id else 0),
-        )
+    conn.execute(
+        """
+        INSERT INTO account_service (account_id, service_id, status, registered)
+        SELECT ?, id, CASE WHEN id = ? THEN ? ELSE 'nunca' END, CASE WHEN id = ? THEN ? ELSE 0 END
+        FROM services WHERE true
+        ON CONFLICT(account_id, service_id) DO UPDATE SET status = excluded.status, registered = excluded.registered
+        """,
+        (account_id, active_service_id, status, active_service_id, registered),
+    )
 
 @routes.get("/healthz")
 def healthz() -> Response:
@@ -165,7 +151,7 @@ def healthz() -> Response:
 def index() -> str:
     conn = get_db()
     services = conn.execute("SELECT id, name FROM services ORDER BY name").fetchall()
-    service_id = selected_service_id()
+    service_id = selected_service_id(services)
     rows: list[dict[str, object]] = []
     fields: list[object] = []
     counts = {status: 0 for status in STATUS_ORDER}
@@ -233,7 +219,6 @@ def index() -> str:
 
 @routes.post("/add")
 def add() -> Response:
-    _require_audit_chain()
     conn = get_db()
     service_id = required_service_id()
     email = _valid_email(request.form.get("email"))
@@ -498,7 +483,6 @@ def field_delete(field_id: int, account_id: int) -> Response:
 
 @routes.post("/api/accounts/<int:account_id>/secrets/password/reveal")
 def reveal_password(account_id: int) -> Response:
-    _require_audit_chain()
     user = g.current_user
     conn = get_db()
     with transaction(conn):

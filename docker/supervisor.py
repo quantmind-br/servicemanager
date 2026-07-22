@@ -70,7 +70,7 @@ def main() -> int:
         gunicorn = subprocess.Popen(
             _command(
                 "SERVICE_MANAGER_GUNICORN_CMD",
-                ["gunicorn", "--config", "/app/gunicorn.conf.py", "--bind", "127.0.0.1:8001", "--workers", "2", "wsgi:app"],
+                ["gunicorn", "--config", "/app/gunicorn.conf.py", "--bind", "127.0.0.1:8001", "wsgi:app"],
             )
         )
         processes.append(gunicorn)

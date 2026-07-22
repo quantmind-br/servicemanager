@@ -53,6 +53,7 @@ CREATE TABLE field_values (
     FOREIGN KEY (field_id) REFERENCES custom_fields(id) ON DELETE CASCADE,
     FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
 );
+CREATE INDEX account_service_service_id ON account_service(service_id);
 CREATE TABLE users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -196,15 +197,11 @@ def _enable_wal(conn: sqlite3.Connection, *, attempts: int = 50, delay: float = 
 def get_db() -> sqlite3.Connection:
     if "db" not in g:
         path = Path(current_app.config["DATABASE_PATH"])
-        path.parent.mkdir(parents=True, exist_ok=True)
-        enforce_database_permissions()
         conn = sqlite3.connect(path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout = 5000")
-        _enable_wal(conn)
         conn.execute("PRAGMA foreign_keys = ON")
         g.db = conn
-        enforce_database_permissions()
     return g.db
 
 
@@ -239,7 +236,10 @@ def _create_schema(conn: sqlite3.Connection) -> None:
 
 
 def init_db() -> None:
+    Path(current_app.config["DATABASE_PATH"]).parent.mkdir(parents=True, exist_ok=True)
+    enforce_database_permissions()
     conn = get_db()
+    _enable_wal(conn)
     with transaction(conn):
         if not _user_tables(conn):
             _create_schema(conn)

@@ -347,6 +347,7 @@ def test_app_js_new_behaviors(client):
         "th-sort",
         '"added"',
         'searchParams.has("ok")',
+        "refreshStatusLabel(row)",
     ):
         assert literal in script
 

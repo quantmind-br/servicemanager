@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import functools
 import binascii
 import secrets
 from dataclasses import dataclass
@@ -32,17 +33,22 @@ _PASSWORD_HASHER = PasswordHasher(
 )
 
 
-def _data_key() -> bytes:
-    configured_key = current_app.config.get("DATA_KEY_V1")
-    if not isinstance(configured_key, str) or not configured_key:
-        raise CryptoError("DATA_KEY_V1 is not configured correctly")
+@functools.lru_cache(maxsize=4)
+def _cipher_for(key_b64: str) -> AESGCM:
     try:
-        key = base64.b64decode(configured_key, validate=True)
+        key = base64.b64decode(key_b64, validate=True)
     except (ValueError, binascii.Error) as error:
         raise CryptoError("DATA_KEY_V1 is not configured correctly") from error
     if len(key) != 32:
         raise CryptoError("DATA_KEY_V1 is not configured correctly")
-    return key
+    return AESGCM(key)
+
+
+def _cipher() -> AESGCM:
+    configured_key = current_app.config.get("DATA_KEY_V1")
+    if not isinstance(configured_key, str) or not configured_key:
+        raise CryptoError("DATA_KEY_V1 is not configured correctly")
+    return _cipher_for(configured_key)
 
 
 def _require_aad(aad: bytes) -> bytes:
@@ -55,7 +61,7 @@ def encrypt_secret(plaintext: str, *, aad: bytes) -> EncryptedValue:
     if not isinstance(plaintext, str):
         raise TypeError("plaintext must be text")
     nonce = secrets.token_bytes(12)
-    ciphertext = AESGCM(_data_key()).encrypt(nonce, plaintext.encode("utf-8"), _require_aad(aad))
+    ciphertext = _cipher().encrypt(nonce, plaintext.encode("utf-8"), _require_aad(aad))
     return EncryptedValue(ciphertext=ciphertext, nonce=nonce, key_version=1)
 
 
@@ -63,7 +69,7 @@ def decrypt_secret(value: EncryptedValue, *, aad: bytes) -> str:
     try:
         if not isinstance(value, EncryptedValue) or value.key_version != 1 or len(value.nonce) != 12:
             raise ValueError("invalid encrypted value")
-        plaintext = AESGCM(_data_key()).decrypt(value.nonce, value.ciphertext, _require_aad(aad))
+        plaintext = _cipher().decrypt(value.nonce, value.ciphertext, _require_aad(aad))
         return plaintext.decode("utf-8")
     except (CryptoError, InvalidTag, UnicodeDecodeError, TypeError, ValueError) as error:
         if isinstance(error, CryptoError) and str(error).startswith("DATA_KEY_V1"):

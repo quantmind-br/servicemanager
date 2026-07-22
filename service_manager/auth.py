@@ -125,7 +125,6 @@ def _set_session(user: Any, *, reauthenticated: bool = False) -> None:
 def _rate_limited(conn: Any, *, username: str, ip: str) -> bool:
     cutoff_ip = (now_utc() - timedelta(minutes=1)).isoformat()
     cutoff_username = (now_utc() - timedelta(minutes=15)).isoformat()
-    conn.execute("DELETE FROM security_events WHERE occurred_at < ?", ((now_utc() - timedelta(hours=24)).isoformat(),))
     ip_count = conn.execute(
         "SELECT COUNT(*) FROM security_events WHERE kind='login_failure' AND source_ip=? AND occurred_at>=?", (ip, cutoff_ip)
     ).fetchone()[0]
@@ -144,7 +143,6 @@ def _record_login_failure(conn: Any, *, username: str, ip: str) -> None:
 
 def consume_reveal_allowance(conn: Any, *, user_id: int, ip: str) -> bool:
     cutoff = (now_utc() - timedelta(minutes=10)).isoformat()
-    conn.execute("DELETE FROM security_events WHERE occurred_at < ?", ((now_utc() - timedelta(hours=24)).isoformat(),))
     count = conn.execute(
         "SELECT COUNT(*) FROM security_events WHERE kind='reveal' AND subject=? AND occurred_at>=?", (str(user_id), cutoff)
     ).fetchone()[0]
@@ -174,7 +172,7 @@ def _authenticate(username: str, password: str, *, require_active: bool = True) 
             return None, _authentication_failure(conn, username=username, ip=ip)
         if needs_password_rehash(user["password_hash"]):
             conn.execute("UPDATE users SET password_hash=?, updated_at=? WHERE id=?", (hash_password(password), now_text(), user["id"]))
-        user = conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
+            user = conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
         _audit(conn, action="login.succeeded", target_type="user", target_id=user["id"], actor_user_id=user["id"])
         return user, None
 
@@ -240,7 +238,8 @@ def _session_user() -> Any | None:
     user = get_db().execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
     if user is None or not user["is_active"] or user["role"] != session["role"] or user["session_version"] != session["session_version"]:
         return None
-    session["last_seen_at"] = now
+    if now - last_seen_at > 60:
+        session["last_seen_at"] = now
     return user
 
 
