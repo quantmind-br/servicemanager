@@ -651,6 +651,85 @@
     if (!fieldValue) { showToast("Informe um valor."); return; }
     submitBulk("/accounts/bulk/field", { field_id: fieldId, field_value: fieldValue });
   });
+  const bulkFieldDialog = document.getElementById("bulk-field-dialog");
+  const bulkFieldForm = document.querySelector("[data-bulk-field-form]");
+  const bulkFieldName = document.getElementById("bulk-field-name");
+  const bulkFieldError = document.querySelector("[data-bulk-field-error]");
+  const bulkFieldDescription = document.getElementById("bulk-field-description");
+  const clearBulkFieldError = () => {
+    if (bulkFieldError) { bulkFieldError.textContent = ""; bulkFieldError.hidden = true; }
+  };
+  const showBulkFieldError = (message) => {
+    if (bulkFieldError) { bulkFieldError.textContent = message; bulkFieldError.hidden = false; }
+  };
+  const closeBulkFieldDialog = () => {
+    if (!bulkFieldDialog || bulkFieldForm?.dataset.submitting) return;
+    if (bulkFieldName) bulkFieldName.value = "";
+    clearBulkFieldError();
+    if (bulkFieldDialog.open) bulkFieldDialog.close();
+  };
+  document.getElementById("bulk-add-field")?.addEventListener("click", () => {
+    if (!selectedAccountIds.size || !bulkFieldDialog || !bulkFieldForm) return;
+    if (bulkFieldName) bulkFieldName.value = "";
+    clearBulkFieldError();
+    if (bulkFieldDescription) {
+      bulkFieldDescription.textContent = `O campo será criado vazio em ${selectedAccountIds.size} conta(s) selecionada(s) para preenchimento individual.`;
+    }
+    syncCsrfFields(bulkFieldForm);
+    bulkFieldDialog.showModal();
+    bulkFieldName?.focus();
+  });
+  bulkFieldDialog?.querySelector("[data-bulk-field-cancel]")?.addEventListener("click", closeBulkFieldDialog);
+  bulkFieldDialog?.addEventListener("cancel", (event) => { event.preventDefault(); closeBulkFieldDialog(); });
+  bulkFieldDialog?.addEventListener("click", (event) => {
+    if (event.target === bulkFieldDialog) closeBulkFieldDialog();
+  });
+  bulkFieldForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (bulkFieldForm.dataset.submitting) return;
+    const name = (bulkFieldName?.value || "").trim();
+    if (!name) { showBulkFieldError("Informe o nome do campo."); bulkFieldName?.focus(); return; }
+    const serviceId = document.querySelector('input[name="service_id"]')?.value;
+    if (!serviceId) return;
+    const body = new URLSearchParams();
+    body.append("csrf_token", csrfToken || "");
+    body.append("service_id", serviceId);
+    body.append("field_name", name);
+    for (const accountId of selectedAccountIds) body.append("account_ids", accountId);
+    clearBulkFieldError();
+    bulkFieldForm.dataset.submitting = "1";
+    const controls = Array.from(bulkFieldForm.querySelectorAll("input, button"));
+    const submitButton = bulkFieldForm.querySelector('button[type="submit"]');
+    controls.forEach((control) => { control.disabled = true; });
+    if (submitButton) submitButton.textContent = "Adicionando…";
+    try {
+      const response = await fetch(bulkFieldForm.action, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRFToken": csrfToken, "Accept": "application/json" },
+        body,
+      });
+      if (response.redirected) {
+        if (new URL(response.url).pathname === "/login") { window.location.assign("/login"); return; }
+        if (response.ok) { window.location.assign(response.url); return; }
+      }
+      if (response.status === 400) {
+        let message = "Campo inválido.";
+        try { message = (await response.json()).error || message; } catch { /* keep fallback */ }
+        showBulkFieldError(message);
+      } else {
+        showBulkFieldError("Não foi possível adicionar o campo.");
+      }
+    } catch {
+      showBulkFieldError("Não foi possível adicionar o campo.");
+    } finally {
+      delete bulkFieldForm.dataset.submitting;
+      controls.forEach((control) => { control.disabled = false; });
+      if (submitButton) submitButton.textContent = "Adicionar campo";
+      bulkFieldName?.focus();
+    }
+  });
   const deleteDialog = document.getElementById("delete-confirm-dialog");
   const deleteInput = document.getElementById("delete-confirm-input");
   const deleteAccept = document.getElementById("delete-confirm-accept");

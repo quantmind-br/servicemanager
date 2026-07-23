@@ -204,9 +204,11 @@ def test_index_renders_url_state_hooks(client):
 def test_index_renders_bulk_field_and_typed_delete_hooks(app, client):
     login_admin(client)
     service_id, account_ids, _ = seed_bulk_data(app)
+    empty_service_id = None
     with app.app_context():
         conn = get_db()
         conn.execute("INSERT INTO custom_fields (service_id, name) VALUES (?, 'PIN')", (service_id,))
+        empty_service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('SemCampos')"))
         conn.commit()
 
     body = client.get(f"/?service={service_id}").get_data(as_text=True)
@@ -216,6 +218,46 @@ def test_index_renders_bulk_field_and_typed_delete_hooks(app, client):
     assert 'id="bulk-apply-field"' in body
     assert 'id="delete-confirm-dialog"' in body
     assert 'id="delete-confirm-input"' in body
+    assert 'id="bulk-add-field"' in body
+    assert 'id="bulk-field-dialog"' in body
+    assert 'data-bulk-field-form' in body
+    assert 'id="bulk-field-name"' in body
+    assert 'O campo será criado vazio para preenchimento individual.' in body
+    assert '/accounts/bulk/field/add' in body
+
+    # Button is available even on a service without any custom field yet.
+    empty_body = client.get(f"/?service={empty_service_id}").get_data(as_text=True)
+    assert 'id="bulk-add-field"' in empty_body
+    assert 'id="bulk-field-dialog"' in empty_body
+    assert 'id="bulk-field-id"' not in empty_body
+
+    # Viewers get neither the button nor the dialog; editors do.
+    with app.app_context():
+        conn = get_db()
+        from service_manager.crypto import hash_password
+        stamp = conn.execute("SELECT created_at FROM users WHERE username='admin'").fetchone()[0]
+        for username, role in (("viewer-u", "viewer"), ("editor-u", "editor")):
+            uid = inserted_id(conn.execute(
+                "INSERT INTO users (username, password_hash, role, is_active, must_change_password, created_at, updated_at) VALUES (?, ?, 'operador', 1, 0, ?, ?)",
+                (username, hash_password("member-password-012345"), stamp, stamp),
+            ))
+            conn.execute(
+                "INSERT INTO service_members (user_id, service_id, role, created_at) VALUES (?, ?, ?, '2026-01-01T00:00:00+00:00')",
+                (uid, service_id, role),
+            )
+        conn.commit()
+
+    client.post("/logout")
+    assert client.post("/login", data={"username": "viewer-u", "password": "member-password-012345"}).status_code == 302
+    viewer_body = client.get(f"/?service={service_id}").get_data(as_text=True)
+    assert 'id="bulk-add-field"' not in viewer_body
+    assert 'id="bulk-field-dialog"' not in viewer_body
+
+    client.post("/logout")
+    assert client.post("/login", data={"username": "editor-u", "password": "member-password-012345"}).status_code == 302
+    editor_body = client.get(f"/?service={service_id}").get_data(as_text=True)
+    assert 'id="bulk-add-field"' in editor_body
+    assert 'id="bulk-field-dialog"' in editor_body
 
 def seed_export_data(app) -> int:
     with app.app_context():
@@ -420,7 +462,7 @@ def test_bulk_field_encrypts_value_on_selected_accounts(app, client):
     assert response.status_code == 302
     with app.app_context():
         conn = get_db()
-        from service_manager.crypto import account_field_aad, decrypt_secret, EncryptedValue
+        from service_manager.crypto import decrypt_secret, EncryptedValue
         rows = conn.execute("SELECT account_id, value_ciphertext, value_nonce, value_key_version FROM field_values WHERE field_id=? ORDER BY account_id", (field_id,)).fetchall()
         assert [r["account_id"] for r in rows] == sorted(account_ids)
         for r in rows:
@@ -446,6 +488,146 @@ def test_bulk_field_rejects_foreign_field_blank_and_oversized(app, client):
     assert foreign.status_code == 404
     assert blank.status_code == 400
     assert oversized.status_code == 400
+
+def test_bulk_field_add_creates_empty_fields_for_individual_fill(app, client):
+    login_admin(client)
+    service_id, account_ids, _ = seed_bulk_data(app)
+
+    response = client.post(
+        "/accounts/bulk/field/add",
+        data={"service_id": service_id, "account_ids": account_ids, "field_name": "Identificador externo"},
+    )
+
+    assert response.status_code == 302
+    assert "ok=bulk_field_created" in response.headers["Location"]
+    with app.app_context():
+        conn = get_db()
+        from service_manager.crypto import decrypt_secret, EncryptedValue
+        fields = conn.execute("SELECT id, name FROM custom_fields WHERE service_id=?", (service_id,)).fetchall()
+        assert [f["name"] for f in fields] == ["Identificador externo"]
+        field_id = fields[0]["id"]
+        rows = conn.execute("SELECT account_id, value_ciphertext, value_nonce, value_key_version FROM field_values WHERE field_id=? ORDER BY account_id", (field_id,)).fetchall()
+        assert [r["account_id"] for r in rows] == sorted(account_ids)
+        for r in rows:
+            assert decrypt_secret(EncryptedValue(r["value_ciphertext"], r["value_nonce"], r["value_key_version"]), aad=account_field_aad(r["account_id"], field_id)) == ""
+        event = conn.execute("SELECT metadata_json FROM audit_events WHERE action='accounts.bulk_field_created' ORDER BY id DESC LIMIT 1").fetchone()
+        assert "Identificador externo" not in event["metadata_json"]
+        assert ('"count":2' in event["metadata_json"]) or ('"count": 2' in event["metadata_json"])
+        assert ('"created_count":2' in event["metadata_json"]) or ('"created_count": 2' in event["metadata_json"])
+
+    body = client.get(f"/?service={service_id}").get_data(as_text=True)
+    assert body.count("Identificador externo") >= 2
+    assert body.count('name="value" value=""') >= 2
+
+    lower, higher = sorted(account_ids)
+    assert client.post(f"/field/update/{field_id}/{lower}", data={"service_id": service_id, "value": "ABC"}).status_code == 302
+    assert client.post(f"/field/update/{field_id}/{higher}", data={"service_id": service_id, "value": "XYZ"}).status_code == 302
+    filled = client.get(f"/?service={service_id}").get_data(as_text=True)
+    assert 'value="ABC"' in filled
+    assert 'value="XYZ"' in filled
+
+
+def test_bulk_field_add_reuses_field_and_preserves_filled_values(app, client):
+    login_admin(client)
+    service_id, account_ids, _ = seed_bulk_data(app)
+    filled_id, empty_id = sorted(account_ids)
+    with app.app_context():
+        conn = get_db()
+        field_id = inserted_id(conn.execute("INSERT INTO custom_fields (service_id, name) VALUES (?, 'Existente')", (service_id,)))
+        encrypted = encrypt_secret("mantido", aad=account_field_aad(filled_id, field_id))
+        conn.execute(
+            "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?)",
+            (field_id, filled_id, encrypted.ciphertext, encrypted.nonce, encrypted.key_version),
+        )
+        conn.commit()
+        before = conn.execute("SELECT value_ciphertext, value_nonce, value_key_version FROM field_values WHERE field_id=? AND account_id=?", (field_id, filled_id)).fetchone()
+        before = (bytes(before["value_ciphertext"]), bytes(before["value_nonce"]), before["value_key_version"])
+
+    response = client.post(
+        "/accounts/bulk/field/add",
+        data={"service_id": service_id, "account_ids": account_ids, "field_name": "Existente"},
+    )
+
+    assert response.status_code == 302
+    assert "ok=bulk_field_created" in response.headers["Location"]
+    with app.app_context():
+        conn = get_db()
+        from service_manager.crypto import decrypt_secret, EncryptedValue
+        assert conn.execute("SELECT COUNT(*) FROM custom_fields WHERE service_id=? AND name='Existente'", (service_id,)).fetchone()[0] == 1
+        after = conn.execute("SELECT value_ciphertext, value_nonce, value_key_version FROM field_values WHERE field_id=? AND account_id=?", (field_id, filled_id)).fetchone()
+        assert (bytes(after["value_ciphertext"]), bytes(after["value_nonce"]), after["value_key_version"]) == before
+        assert decrypt_secret(EncryptedValue(after["value_ciphertext"], after["value_nonce"], after["value_key_version"]), aad=account_field_aad(filled_id, field_id)) == "mantido"
+        empty = conn.execute("SELECT value_ciphertext, value_nonce, value_key_version FROM field_values WHERE field_id=? AND account_id=?", (field_id, empty_id)).fetchone()
+        assert decrypt_secret(EncryptedValue(empty["value_ciphertext"], empty["value_nonce"], empty["value_key_version"]), aad=account_field_aad(empty_id, field_id)) == ""
+        event = conn.execute("SELECT metadata_json FROM audit_events WHERE action='accounts.bulk_field_created' ORDER BY id DESC LIMIT 1").fetchone()
+        metadata = json.loads(event["metadata_json"])
+        assert metadata == {"count": 2, "created_count": 1, "field_id": field_id}
+
+
+def test_bulk_field_add_dedupes_selection(app, client):
+    login_admin(client)
+    service_id, account_ids, _ = seed_bulk_data(app)
+
+    response = client.post(
+        "/accounts/bulk/field/add",
+        data={"service_id": service_id, "account_ids": account_ids + account_ids, "field_name": "Dup"},
+    )
+
+    assert response.status_code == 302
+    with app.app_context():
+        conn = get_db()
+        field_id = conn.execute("SELECT id FROM custom_fields WHERE service_id=? AND name='Dup'", (service_id,)).fetchone()["id"]
+        assert conn.execute("SELECT COUNT(*) FROM field_values WHERE field_id=?", (field_id,)).fetchone()[0] == 2
+        event = conn.execute("SELECT metadata_json FROM audit_events WHERE action='accounts.bulk_field_created' ORDER BY id DESC LIMIT 1").fetchone()
+        assert json.loads(event["metadata_json"]) == {"count": 2, "created_count": 2, "field_id": field_id}
+
+
+def test_bulk_field_add_rejects_invalid_requests(app, client):
+    login_admin(client)
+    service_id, account_ids, foreign_id = seed_bulk_data(app)
+
+    foreign = client.post("/accounts/bulk/field/add", data={"service_id": service_id, "account_ids": [foreign_id], "field_name": "N"})
+    empty_sel = client.post("/accounts/bulk/field/add", data={"service_id": service_id, "field_name": "N"})
+    over_limit = client.post("/accounts/bulk/field/add", data={"service_id": service_id, "account_ids": list(range(1, 202)), "field_name": "N"})
+    empty_name = client.post("/accounts/bulk/field/add", data={"service_id": service_id, "account_ids": account_ids, "field_name": "   "}, headers={"Accept": "application/json"})
+    long_name = client.post("/accounts/bulk/field/add", data={"service_id": service_id, "account_ids": account_ids, "field_name": "x" * 101})
+
+    assert foreign.status_code == 404
+    assert empty_sel.status_code == 400
+    assert over_limit.status_code == 400
+    assert empty_name.status_code == 400
+    assert empty_name.get_json() == {"error": "Campo inválido"}
+    assert long_name.status_code == 400
+    with app.app_context():
+        conn = get_db()
+        assert conn.execute("SELECT COUNT(*) FROM custom_fields WHERE service_id=?", (service_id,)).fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM field_values").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM audit_events WHERE action='accounts.bulk_field_created'").fetchone()[0] == 0
+
+
+def test_bulk_field_add_requires_editor_role(app, client):
+    service_id, account_ids, _ = seed_bulk_data(app)
+    login_operator(app, client)
+    with app.app_context():
+        conn = get_db()
+        user_id = conn.execute("SELECT id FROM users WHERE username='operator'").fetchone()["id"]
+        conn.execute(
+            "INSERT INTO service_members (user_id, service_id, role, created_at) VALUES (?, ?, 'viewer', '2026-01-01T00:00:00+00:00')",
+            (user_id, service_id),
+        )
+        conn.commit()
+
+    response = client.post(
+        "/accounts/bulk/field/add",
+        data={"service_id": service_id, "account_ids": account_ids, "field_name": "Bloqueado"},
+    )
+
+    assert response.status_code == 403
+    with app.app_context():
+        conn = get_db()
+        assert conn.execute("SELECT COUNT(*) FROM custom_fields WHERE service_id=?", (service_id,)).fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM field_values").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM audit_events WHERE action='accounts.bulk_field_created'").fetchone()[0] == 0
 
 def test_audit_view_filters_exports_and_requires_admin(app, client):
     login_admin(client)

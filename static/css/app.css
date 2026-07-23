@@ -682,6 +682,8 @@ table.accounts tbody td {
 .dialog-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .5rem; }
 .service-preferences-dialog form { display: grid; gap: .9rem; }
 .service-preferences-dialog .muted { margin: -.35rem 0 0; }
+.bulk-field-dialog form { display: grid; gap: .75rem; }
+.bulk-field-dialog .muted { margin: -.35rem 0 0; }
 [data-service-order-list] { display: grid; gap: .45rem; margin: 0; padding: 0; list-style: none; }
 [data-service-order-item] {
   display: flex;

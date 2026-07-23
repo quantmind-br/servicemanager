@@ -110,6 +110,7 @@
   <input id="bulk-field-value" maxlength="4096" required aria-label="Valor do campo em massa">
   <button id="bulk-apply-field" class="button button-small" type="button">Aplicar campo</button>
   {% endif %}
+  <button id="bulk-add-field" class="button button-small" type="button">Adicionar campo</button>
   {% endif %}
   {% if is_admin %}<button id="bulk-delete" class="button button-small button-danger" type="button">Excluir selecionadas</button>{% endif %}
 </div>
@@ -389,6 +390,23 @@
     <button class="button button-small button-quiet" type="button" id="delete-confirm-cancel">Cancelar</button>
     <button class="button button-small button-danger" type="button" id="delete-confirm-accept" disabled>Excluir</button>
   </div>
+</dialog>
+{% endif %}
+{% if current and capabilities['edit'] %}
+<dialog id="bulk-field-dialog" class="account-edit-dialog bulk-field-dialog" aria-labelledby="bulk-field-title">
+  <form method="post" action="{{ url_for('routes.bulk_field_add') }}" data-bulk-field-form data-no-submit-lock>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="service_id" value="{{ current }}">
+    <h3 id="bulk-field-title">Adicionar campo às contas selecionadas</h3>
+    <p id="bulk-field-description" class="muted">O campo será criado vazio para preenchimento individual.</p>
+    <label for="bulk-field-name">Nome do campo</label>
+    <input id="bulk-field-name" name="field_name" required minlength="1" maxlength="100" autocomplete="off" aria-describedby="bulk-field-description">
+    <p class="feedback feedback-error form-error" role="alert" data-bulk-field-error hidden></p>
+    <div class="dialog-actions">
+      <button class="button button-small button-quiet" type="button" data-bulk-field-cancel>Cancelar</button>
+      <button class="button button-small" type="submit">Adicionar campo</button>
+    </div>
+  </form>
 </dialog>
 {% endif %}
 <div id="toast" class="toast" role="alert" hidden></div>

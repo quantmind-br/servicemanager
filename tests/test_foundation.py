@@ -128,6 +128,7 @@ def test_index_requires_authentication_and_never_renders_the_account_password(ap
         ("/import", "POST"),
         ("/update/<int:item_id>", "POST"),
         ("/delete/<int:item_id>", "POST"),
+        ("/accounts/bulk/field/add", "POST"),
         ("/service/add", "POST"),
         ("/service/delete/<int:service_id>", "POST"),
         ("/field/add", "POST"),
@@ -170,6 +171,29 @@ def test_secret_field_mutation_without_csrf_does_not_change_existing_value(app, 
             aad=account_field_aad(account_id, row["field_id"]),
         )
     assert value == "existing-value"
+
+
+def test_bulk_field_add_without_csrf_creates_nothing(app, client):
+    service_id = seed_account(app, password="known-password", field_value="existing-value")
+    authenticate(client, app, role="admin")
+    with app.app_context():
+        conn = get_db()
+        account_id = conn.execute("SELECT id FROM accounts WHERE email = ?", ("person@example.test",)).fetchone()["id"]
+        before_fields = conn.execute("SELECT COUNT(*) FROM custom_fields").fetchone()[0]
+        before_values = conn.execute("SELECT COUNT(*) FROM field_values").fetchone()[0]
+
+    response = client.post(
+        "/accounts/bulk/field/add",
+        data={"service_id": service_id, "account_ids": str(account_id), "field_name": "Novo campo"},
+        headers={"Origin": PUBLIC_ORIGIN},
+    )
+
+    assert response.status_code == 403
+    with app.app_context():
+        conn = get_db()
+        assert conn.execute("SELECT COUNT(*) FROM custom_fields").fetchone()[0] == before_fields
+        assert conn.execute("SELECT COUNT(*) FROM field_values").fetchone()[0] == before_values
+        assert conn.execute("SELECT COUNT(*) FROM audit_events WHERE action='accounts.bulk_field_created'").fetchone()[0] == 0
 
 
 def test_corrupt_xlsx_import_redirects_with_format_error_without_mutating(app, client):

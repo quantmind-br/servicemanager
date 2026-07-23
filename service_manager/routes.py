@@ -61,6 +61,7 @@ OK_MESSAGES = {
     "service_deleted": "Serviço excluído.",
     "bulk_updated": "Contas atualizadas.",
     "bulk_deleted": "Contas excluídas.",
+    "bulk_field_created": "Campo adicionado às contas selecionadas.",
     "rotation_policy_updated": "Política de rotação atualizada.",
     "rotation_completed": "Rotação concluída.",
     "rotation_incomplete": "Rotação marcada como pendente.",
@@ -1116,6 +1117,43 @@ def bulk_field() -> ResponseReturnValue:
             )
         _audit(conn, action="accounts.bulk_field", target_type="service", target_id=service_id, metadata={"count": len(account_ids), "field_id": field_id})
     return redirect(url_for("routes.index", service=service_id, ok="bulk_updated"))
+
+
+@routes.post("/accounts/bulk/field/add")
+def bulk_field_add() -> ResponseReturnValue:
+    conn = get_db()
+    service_id = required_service_id()
+    account_ids = _bulk_account_ids()
+    if isinstance(account_ids, Response):
+        return account_ids
+    name = _valid_name(request.form.get("field_name"))
+    if name is None:
+        return _form_error("Campo inválido")
+    for account_id in account_ids:
+        require_account_role(conn, account_id, service_id, "editor")
+    placeholders = ",".join("?" for _ in account_ids)
+    with transaction(conn):
+        field = conn.execute("SELECT id FROM custom_fields WHERE service_id=? AND name=?", (service_id, name)).fetchone()
+        field_id = field["id"] if field else inserted_id(conn.execute(
+            "INSERT INTO custom_fields (service_id, name) VALUES (?, ?)", (service_id, name)
+        ))
+        existing = {
+            row["account_id"]
+            for row in conn.execute(
+                f"SELECT account_id FROM field_values WHERE field_id=? AND account_id IN ({placeholders})",
+                (field_id, *account_ids),
+            )
+        }
+        missing_account_ids = [account_id for account_id in account_ids if account_id not in existing]
+        for account_id in missing_account_ids:
+            encrypted = encrypted_field_value(account_id, field_id, "")
+            conn.execute(
+                "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?) ON CONFLICT(field_id, account_id) DO NOTHING",
+                (field_id, account_id, *encrypted),
+            )
+        created_count = len(missing_account_ids)
+        _audit(conn, action="accounts.bulk_field_created", target_type="service", target_id=service_id, metadata={"count": len(account_ids), "created_count": created_count, "field_id": field_id})
+    return redirect(url_for("routes.index", service=service_id, ok="bulk_field_created"))
 
 
 @routes.post("/accounts/bulk/delete")

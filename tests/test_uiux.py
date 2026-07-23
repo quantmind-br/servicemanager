@@ -453,8 +453,26 @@ def test_app_js_bulk_selection_persists_and_typed_delete(client):
         "delete-confirm-input",
         "/accounts/bulk/field",
         "bulk-apply-field",
+        "bulk-add-field",
+        "bulk-field-dialog",
+        "selectedAccountIds",
+        "new URLSearchParams",
+        "Adicionando…",
+        "Informe o nome do campo.",
+        "Não foi possível adicionar o campo.",
+        "bulkFieldForm.dataset.submitting",
     ):
         assert literal in script
+    # No browser storage of selection/state.
+    assert "localStorage" not in script
+    assert "sessionStorage" not in script
+    # The bulk-field body (with account_ids) MUST be built before controls are disabled,
+    # otherwise disabled inputs drop from any FormData-derived payload and the ids are lost.
+    build = script.index('body.append("field_name"')
+    disable = script.index("control.disabled = true", build)
+    assert build < disable
+    # Success navigates to the followed redirect URL so the new empty fields render.
+    assert "window.location.assign(response.url)" in script
 
 
 def test_app_js_coverage_missing_registration_filter(client):
