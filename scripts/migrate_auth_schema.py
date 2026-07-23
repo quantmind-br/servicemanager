@@ -25,15 +25,17 @@ from _migration_io import (
     _snapshot,
     frozen_schema_objects,
     normalized_objects,
+    structural_schema_valid,
 )
 from _pre_feature_schema import PRE_FEATURE_SCHEMA
 from service_manager.audit import verify_audit_chain_with_key
-from service_manager.db import SCHEMA, schema_is_current
+from service_preferences_schema import PRE_SERVICE_PREFERENCES_SCHEMA as TARGET_SCHEMA
 
 # The frozen source contract: the canonical schema exactly as it existed before
 # the feature-pack cutover. Source validation compares against this constant and
 # never against the live (post-cutover) service_manager.db.SCHEMA.
 _PRE_FEATURE_OBJECTS, _PRE_FEATURE_COLUMNS = frozen_schema_objects(PRE_FEATURE_SCHEMA)
+_TARGET_OBJECTS, _TARGET_COLUMNS = frozen_schema_objects(TARGET_SCHEMA)
 
 # Tables carried across verbatim, with the columns preserved for each.
 _COPY_COLUMNS = {
@@ -139,8 +141,7 @@ def _validate_destination(
     membership_count: int,
     audit_key: bytes,
 ) -> None:
-    if not schema_is_current(conn):
-        raise ScriptError("target schema is incompatible")
+    structural_schema_valid(conn, _TARGET_OBJECTS, _TARGET_COLUMNS)
     try:
         if conn.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
             raise ScriptError("target foreign-key enforcement is disabled")
@@ -231,7 +232,7 @@ def migrate(source_path: Path, target_path: Path, audit_key_env: str = "AUDIT_KE
         if destination.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
             raise ScriptError("target foreign-key enforcement is disabled")
         destination.execute("BEGIN IMMEDIATE")
-        _create_schema(destination, SCHEMA)
+        _create_schema(destination, TARGET_SCHEMA)
         copied, sequences, membership_count = _copy(source, destination)
         _validate_destination(destination, copied, sequences, membership_count, audit_key)
         destination.commit()

@@ -866,7 +866,7 @@ def test_add_and_import_set_password_changed_at(app, client):
         assert ts is not None
 
 
-def _seed_link(app, *, service_name="Frozen", email="frozen@example.test", changed_at="2020-01-01T00:00:00+00:00", link_days=30, due_at="2026-08-01"):
+def _seed_link(app, *, service_name="Frozen", email="frozen@example.test", changed_at="2020-01-01T00:00:00+00:00", link_days=30, due_at: str | None = "2026-08-01"): 
     """Seed a service+account+link WITHOUT enabling rotation (feature off by default)."""
     with app.app_context():
         conn = get_db()

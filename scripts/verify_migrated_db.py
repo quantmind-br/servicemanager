@@ -17,11 +17,12 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from _pre_feature_schema import PRE_FEATURE_SCHEMA
 from service_manager.audit import verify_audit_chain_with_key
 from service_manager.db import SCHEMA
+from service_preferences_schema import PRE_SERVICE_PREFERENCES_SCHEMA
 
 EXPECTED_COUNTS = {"accounts": 116, "account_service": 116, "field_values": 116, "credentials_backup": 116}
 EXPECTED_TABLES = {
     "accounts", "services", "account_service", "custom_fields", "field_values", "users",
-    "security_events", "audit_events", "service_members",
+    "security_events", "audit_events", "service_members", "user_service_preferences",
     "webhook_configs", "webhook_subscriptions", "webhook_deliveries", "app_settings",
 }
 EXPECTED_COLUMNS = {
@@ -34,6 +35,7 @@ EXPECTED_COLUMNS = {
     "security_events": {"id", "kind", "subject", "source_ip", "occurred_at"},
     "audit_events": {"id", "occurred_at", "actor_user_id", "action", "target_type", "target_id", "metadata_json", "source_ip", "user_agent", "previous_hash", "event_hash"},
     "service_members": {"user_id", "service_id", "role", "created_at"},
+    "user_service_preferences": {"user_id", "service_id", "position", "is_initial"},
     "webhook_configs": {"id", "destination_host", "url_ciphertext", "url_nonce", "url_key_version", "description", "enabled", "signing_secret_ciphertext", "signing_secret_nonce", "signing_secret_key_version", "created_at", "updated_at", "deleted_at"},
     "webhook_subscriptions": {"config_id", "event_type"},
     "webhook_deliveries": {"id", "config_id", "event_type", "payload_json", "status", "attempt_count", "next_attempt_at", "lease_token", "leased_at", "last_status_code", "last_error", "created_at", "delivered_at"},
@@ -116,6 +118,7 @@ def _schema_from(schema_sql: str) -> dict[str, dict[str, str]]:
 
 
 CANONICAL_SECURE_SCHEMA = _schema_from(SCHEMA)
+PRE_SERVICE_PREFERENCES_SECURE_SCHEMA = _schema_from(PRE_SERVICE_PREFERENCES_SCHEMA)
 # Source validation compares against the frozen pre-feature schema, never the live SCHEMA.
 PRE_FEATURE_SECURE_SCHEMA = _schema_from(PRE_FEATURE_SCHEMA)
 
@@ -127,21 +130,34 @@ def _table_names(conn: sqlite3.Connection) -> set[str]:
     }
 
 
-def _validate_new_canonical_target(conn: sqlite3.Connection) -> None:
-    for kind, expected in CANONICAL_SECURE_SCHEMA.items():
+def _validate_schema_target(
+    conn: sqlite3.Connection,
+    expected_schema: dict[str, dict[str, str]],
+    expected_columns: dict[str, set[str]],
+) -> None:
+    for kind, expected in expected_schema.items():
         actual = {
             name: _normalize_schema_sql(sql)
             for name, sql in _objects(conn, kind).items()
         }
         if actual != expected:
             raise ScriptError("target schema is incompatible")
-    for table, expected in EXPECTED_COLUMNS.items():
+    for table, expected in expected_columns.items():
         if _columns(conn, table) != expected:
             raise ScriptError("target schema is incompatible")
     if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
         raise ScriptError("target integrity is invalid")
     if list(conn.execute("PRAGMA foreign_key_check")):
         raise ScriptError("target foreign-key validation failed")
+
+
+def _validate_new_canonical_target(conn: sqlite3.Connection) -> None:
+    _validate_schema_target(conn, CANONICAL_SECURE_SCHEMA, EXPECTED_COLUMNS)
+
+
+def _validate_pre_preferences_target(conn: sqlite3.Connection) -> None:
+    columns = {table: values for table, values in EXPECTED_COLUMNS.items() if table != "user_service_preferences"}
+    _validate_schema_target(conn, PRE_SERVICE_PREFERENCES_SECURE_SCHEMA, columns)
 
 
 # --------------------------------------------------------------------------- #
@@ -166,7 +182,7 @@ def _legacy(conn: sqlite3.Connection) -> tuple[list[sqlite3.Row], ...]:
 
 def _secure(conn: sqlite3.Connection) -> None:
     try:
-        _validate_new_canonical_target(conn)
+        _validate_pre_preferences_target(conn)
         if any(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] != count for table, count in EXPECTED_COUNTS.items() if table != "credentials_backup"):
             raise ScriptError("target counts are incompatible")
     except sqlite3.Error as error:
@@ -317,6 +333,49 @@ def _scan_pre_feature(target: Path, conn: sqlite3.Connection, data_key: bytes) -
             raise ScriptError("target contains plaintext residue")
 
 
+def _matches_schema(conn: sqlite3.Connection, expected: dict[str, dict[str, str]]) -> bool:
+    return all(
+        {
+            name: _normalize_schema_sql(sql)
+            for name, sql in _objects(conn, kind).items()
+        } == objects
+        for kind, objects in expected.items()
+    )
+
+
+def _all_table_rows(conn: sqlite3.Connection, tables: set[str]) -> dict[str, list[tuple[object, ...]]]:
+    return {
+        table: [tuple(row) for row in conn.execute(f'SELECT * FROM "{table}" ORDER BY rowid')]
+        for table in tables
+    }
+
+
+def _verify_service_preferences_hop(
+    source: sqlite3.Connection,
+    target: sqlite3.Connection,
+    audit_key: bytes,
+) -> None:
+    _validate_schema_target(
+        source,
+        PRE_SERVICE_PREFERENCES_SECURE_SCHEMA,
+        {table: values for table, values in EXPECTED_COLUMNS.items() if table != "user_service_preferences"},
+    )
+    if not verify_audit_chain_with_key(source, audit_key):
+        raise ScriptError("source audit chain validation failed")
+    source_tables = _table_names(source)
+    source_rows = _all_table_rows(source, source_tables)
+    source_sequences = [tuple(row) for row in source.execute("SELECT name, seq FROM sqlite_sequence ORDER BY name")]
+    _validate_new_canonical_target(target)
+    if _all_table_rows(target, source_tables) != source_rows:
+        raise ScriptError("target rows do not match source")
+    if [tuple(row) for row in target.execute("SELECT name, seq FROM sqlite_sequence ORDER BY name")] != source_sequences:
+        raise ScriptError("target sequences do not match source")
+    if target.execute("SELECT COUNT(*) FROM user_service_preferences").fetchone()[0]:
+        raise ScriptError("target service preferences initialization failed")
+    if not verify_audit_chain_with_key(target, audit_key):
+        raise ScriptError("target audit chain validation failed")
+
+
 def verify(
     source_path: Path,
     target_path: Path,
@@ -339,12 +398,17 @@ def verify(
             _secure(target)
             _compare(target, source_data, data_key)
             _scan(target_path, source_data)
+        elif _matches_schema(source, PRE_SERVICE_PREFERENCES_SECURE_SCHEMA):
+            if _after_snapshot_ready is not None:
+                _after_snapshot_ready()
+            _verify_service_preferences_hop(source, target, audit_key)
+            _scan_pre_feature(target_path, target, data_key)
         else:
             _validate_pre_feature_source(source, audit_key)
             snapshot = _pre_feature_snapshot(source)
             if _after_snapshot_ready is not None:
                 _after_snapshot_ready()
-            _validate_new_canonical_target(target)
+            _validate_pre_preferences_target(target)
             _compare_pre_feature(target, snapshot, data_key, audit_key)
             _scan_pre_feature(target_path, target, data_key)
     finally:

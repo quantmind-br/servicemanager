@@ -680,6 +680,34 @@ table.accounts tbody td {
 .account-edit-dialog::backdrop { background: rgba(0, 0, 0, .5); }
 .account-edit-dialog h3 { margin-bottom: .9rem; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .5rem; }
+.service-preferences-dialog form { display: grid; gap: .9rem; }
+.service-preferences-dialog .muted { margin: -.35rem 0 0; }
+[data-service-order-list] { display: grid; gap: .45rem; margin: 0; padding: 0; list-style: none; }
+[data-service-order-item] {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  padding: .55rem .65rem;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.service-order-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.service-order-actions { display: inline-flex; flex: none; gap: .35rem; }
+.service-order-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+.service-order-button:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-strong); }
+.service-order-button:disabled { cursor: not-allowed; opacity: .38; }
 
 @media (min-width: 34rem) {
   .account-edit-dialog .detail-grid { grid-template-columns: 1fr 1fr; }
@@ -728,6 +756,7 @@ table.accounts tbody td {
   .button-small { padding: .6rem .8rem; }
   .admin-menu-trigger, .admin-menu-item { min-height: 2.75rem; }
   .column-filter input, .column-filter select { min-height: 2.75rem; }
+  .service-order-button { width: 2.75rem; height: 2.75rem; }
 }
 
 /* ---------- Responsive ---------- */

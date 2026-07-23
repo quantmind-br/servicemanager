@@ -41,6 +41,7 @@ def test_new_database_has_the_exact_username_only_secure_schema(app):
         "security_events",
         "audit_events",
         "service_members",
+        "user_service_preferences",
         "webhook_configs",
         "webhook_subscriptions",
         "webhook_deliveries",
@@ -120,8 +121,9 @@ def test_feature_pack_schema_columns_constraints_indexes_and_delivery_mutability
         assert "rotation_days" in table_columns(conn, "services")
         assert {"rotation_days", "rotation_due_at"} <= table_columns(conn, "account_service")
         assert table_columns(conn, "service_members") == {"user_id", "service_id", "role", "created_at"}
+        assert table_columns(conn, "user_service_preferences") == {"user_id", "service_id", "position", "is_initial"}
         indexes = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
-        assert {"service_members_service_id", "webhook_deliveries_status_next_attempt", "webhook_deliveries_config_created"} <= indexes
+        assert {"service_members_service_id", "user_service_preferences_one_initial", "webhook_deliveries_status_next_attempt", "webhook_deliveries_config_created"} <= indexes
         # app_settings key/value CHECKs reject unknown keys and non-binary values.
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute("INSERT INTO app_settings (key, value) VALUES ('bogus_key', '1')")
@@ -145,10 +147,26 @@ def test_feature_pack_schema_columns_constraints_indexes_and_delivery_mutability
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute("INSERT INTO service_members (user_id, service_id, role, created_at) VALUES (?, ?, 'bogus', '2026-01-01T00:00:00Z')", (user_id, service_id))
         conn.execute("INSERT INTO service_members (user_id, service_id, role, created_at) VALUES (?, ?, 'service_admin', '2026-01-01T00:00:00Z')", (user_id, service_id))
+        second_service_id = conn.execute("INSERT INTO services (name) VALUES ('Storage')").lastrowid
+        conn.execute(
+            "INSERT INTO user_service_preferences (user_id, service_id, position, is_initial) VALUES (?, ?, 0, 1)",
+            (user_id, service_id),
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO user_service_preferences (user_id, service_id, position, is_initial) VALUES (?, ?, 1, 1)",
+                (user_id, second_service_id),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO user_service_preferences (user_id, service_id, position, is_initial) VALUES (?, ?, -1, 0)",
+                (user_id, second_service_id),
+            )
         # service_members FK cascades on service delete.
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("DELETE FROM services WHERE id = ?", (service_id,))
         assert conn.execute("SELECT COUNT(*) FROM service_members WHERE service_id = ?", (service_id,)).fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM user_service_preferences WHERE service_id = ?", (service_id,)).fetchone()[0] == 0
         # webhook config + subscription CHECK + delivery mutability.
         config_id = conn.execute(
             "INSERT INTO webhook_configs (destination_host, url_ciphertext, url_nonce, url_key_version, signing_secret_ciphertext, signing_secret_nonce, signing_secret_key_version, created_at, updated_at) VALUES ('h.test', ?, ?, 1, ?, ?, 1, ?, ?)",
@@ -169,12 +187,19 @@ def test_feature_pack_schema_columns_constraints_indexes_and_delivery_mutability
         # service_members FKs cascade to both parents.
         member_fks = {row["table"]: row["on_delete"] for row in conn.execute("PRAGMA foreign_key_list(service_members)")}
         assert member_fks == {"users": "CASCADE", "services": "CASCADE"}
+        preference_fks = {row["table"]: row["on_delete"] for row in conn.execute("PRAGMA foreign_key_list(user_service_preferences)")}
+        assert preference_fks == {"users": "CASCADE", "services": "CASCADE"}
         # webhook_subscriptions cascades to its config.
         sub_fks = {row["table"]: row["on_delete"] for row in conn.execute("PRAGMA foreign_key_list(webhook_subscriptions)")}
         assert sub_fks == {"webhook_configs": "CASCADE"}
         # Exact CHECK literals frozen in the canonical schema SQL.
         sql = {row["name"]: row["sql"] for row in conn.execute("SELECT name, sql FROM sqlite_master WHERE type='table'")}
         assert "role IN ('viewer', 'editor', 'service_admin')" in sql["service_members"]
+        assert "position >= 0" in sql["user_service_preferences"]
+        assert "is_initial IN (0, 1)" in sql["user_service_preferences"]
+        preference_indexes = {row["name"]: row["sql"] for row in conn.execute("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='user_service_preferences'")}
+        assert "UNIQUE (user_id, position)" in sql["user_service_preferences"]
+        assert "WHERE is_initial = 1" in preference_indexes["user_service_preferences_one_initial"]
         assert "attempt_count BETWEEN 0 AND 5" in sql["webhook_deliveries"]
         assert "status IN ('pending', 'delivering', 'retry', 'succeeded', 'failed')" in sql["webhook_deliveries"]
         assert "kind IN ('login_failure', 'reveal', 'reveal_blocked', 'audit_degraded')" in sql["security_events"]

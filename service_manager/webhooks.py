@@ -400,6 +400,8 @@ def create_webhook_config(
         (host, b"", b"", 1, description, int(enabled), b"", b"", 1, now, now),
     )
     config_id = cur.lastrowid
+    if config_id is None:
+        raise RuntimeError("webhook insert did not return an id")
     secret_bytes = secrets.token_bytes(32)
     secret_b64 = _url_safe_b64_encode(secret_bytes)
     url_env = encrypt_secret_with_key(data_key_b64, url, aad=webhook_url_aad(config_id))
@@ -519,10 +521,11 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         context = ssl.create_default_context()
         super().__init__(hostname, port=443, timeout=timeout, context=context)
         self._resolved_ip = resolved_ip
+        self._ssl_context = context
 
     def connect(self) -> None:  # noqa: D401 - override
         sock = socket.create_connection((self._resolved_ip, 443), timeout=self.timeout)
-        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+        self.sock = self._ssl_context.wrap_socket(sock, server_hostname=self.host)
 
 
 # --------------------------------------------------------------------------
@@ -662,7 +665,7 @@ def deliver_once(
                 },
             )
             response = conn_out.getresponse()
-            status_code = response.status
+            status_code = int(response.status)
             # Only the status matters; cap the drain so a hostile endpoint cannot
             # balloon worker memory with an unbounded body before the timeout.
             response.read(_MAX_RESPONSE_BODY_BYTES)

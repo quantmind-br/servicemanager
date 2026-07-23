@@ -192,6 +192,114 @@
   });
   window.addEventListener("pagehide", restoreAllMasks);
 
+  // ===== Service preferences modal: atomic server persistence for order and initial service.
+  const servicePreferencesDialog = document.getElementById("service-preferences-dialog");
+  const servicePreferencesForm = servicePreferencesDialog?.querySelector("[data-service-preferences-form]");
+  const serviceOrderList = servicePreferencesForm?.querySelector("[data-service-order-list]");
+  const initialServiceSelect = servicePreferencesForm?.querySelector("#initial-service-id");
+  let servicePreferencesSnapshot = null;
+  if (servicePreferencesDialog && servicePreferencesForm && serviceOrderList && initialServiceSelect) {
+    const orderedItems = () => Array.from(serviceOrderList.querySelectorAll("[data-service-order-item]"));
+    const syncServiceOrderButtons = () => {
+      const items = orderedItems();
+      items.forEach((item, index) => {
+        item.querySelector('[data-move-service="up"]').disabled = index === 0;
+        item.querySelector('[data-move-service="down"]').disabled = index === items.length - 1;
+      });
+    };
+    const serviceOrder = () => orderedItems().map((item) => item.dataset.serviceId);
+    const restoreServicePreferences = () => {
+      if (!servicePreferencesSnapshot) return;
+      for (const id of servicePreferencesSnapshot.order) {
+        const item = serviceOrderList.querySelector(`[data-service-id="${id}"]`);
+        const option = initialServiceSelect.querySelector(`option[value="${id}"]`);
+        if (item) serviceOrderList.append(item);
+        if (option) initialServiceSelect.append(option);
+      }
+      initialServiceSelect.value = servicePreferencesSnapshot.initial;
+      syncServiceOrderButtons();
+    };
+    const closeServicePreferences = () => {
+      if (servicePreferencesForm.dataset.submitting) return;
+      restoreServicePreferences();
+      if (servicePreferencesDialog.open) servicePreferencesDialog.close();
+    };
+    document.querySelector("[data-service-preferences-open]")?.addEventListener("click", () => {
+      servicePreferencesSnapshot = { order: serviceOrder(), initial: initialServiceSelect.value };
+      syncCsrfFields(servicePreferencesForm);
+      servicePreferencesDialog.showModal();
+    });
+    servicePreferencesForm.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-move-service]");
+      if (!button) return;
+      const item = button.closest("[data-service-order-item]");
+      const sibling = button.dataset.moveService === "up" ? item.previousElementSibling : item.nextElementSibling;
+      if (!sibling) return;
+      if (button.dataset.moveService === "up") serviceOrderList.insertBefore(item, sibling);
+      else serviceOrderList.insertBefore(sibling, item);
+      const option = initialServiceSelect.querySelector(`option[value="${item.dataset.serviceId}"]`);
+      const siblingOption = initialServiceSelect.querySelector(`option[value="${sibling.dataset.serviceId}"]`);
+      if (option && siblingOption) {
+        if (button.dataset.moveService === "up") initialServiceSelect.insertBefore(option, siblingOption);
+        else initialServiceSelect.insertBefore(siblingOption, option);
+      }
+      syncServiceOrderButtons();
+      (button.disabled ? item.querySelector(`[data-move-service="${button.dataset.moveService === "up" ? "down" : "up"}"]`) : button)?.focus();
+    });
+    servicePreferencesForm.querySelector("[data-service-preferences-cancel]")?.addEventListener("click", closeServicePreferences);
+    servicePreferencesDialog.addEventListener("cancel", (event) => { event.preventDefault(); closeServicePreferences(); });
+    servicePreferencesDialog.addEventListener("click", (event) => {
+      if (event.target === servicePreferencesDialog) closeServicePreferences();
+    });
+    servicePreferencesForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (servicePreferencesForm.dataset.submitting) return;
+      const body = new URLSearchParams(new FormData(servicePreferencesForm));
+      servicePreferencesForm.dataset.submitting = "1";
+      const controls = Array.from(servicePreferencesForm.querySelectorAll("button, select"));
+      const submitButton = servicePreferencesForm.querySelector('button[type="submit"]');
+      controls.forEach((control) => { control.disabled = true; });
+      if (submitButton) submitButton.textContent = "Salvando…";
+      try {
+        const response = await fetch(servicePreferencesForm.action, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "X-CSRFToken": csrfToken },
+          body,
+        });
+        if (response.redirected && new URL(response.url).pathname === "/login") {
+          window.location.assign(response.url);
+          return;
+        }
+        if (response.status === 204) {
+          const chips = document.querySelector(".service-chips");
+          if (chips) {
+            for (const id of serviceOrder()) {
+              const chip = chips.querySelector(`[data-service-chip][data-service-id="${id}"]`);
+              if (chip) chips.append(chip);
+            }
+          }
+          servicePreferencesSnapshot = { order: serviceOrder(), initial: initialServiceSelect.value };
+          servicePreferencesDialog.close();
+          announceSave("Preferências de serviços salvas.");
+        } else if (response.status === 400) {
+          showToast("Preferências de serviços inválidas.");
+        } else {
+          showToast("Não foi possível salvar as preferências.");
+        }
+      } catch {
+        showToast("Não foi possível salvar as preferências.");
+      } finally {
+        delete servicePreferencesForm.dataset.submitting;
+        controls.forEach((control) => { control.disabled = false; });
+        syncServiceOrderButtons();
+        if (submitButton) submitButton.textContent = "Salvar preferências";
+      }
+    });
+  }
+
+
   // ===== Account edit modal: a single reusable <dialog> filled per-row.
   const editDialog = document.getElementById("account-edit-dialog");
   const editForm = editDialog?.querySelector("[data-edit-form]");

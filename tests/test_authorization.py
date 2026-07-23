@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from flask import g
+from werkzeug.datastructures import MultiDict
 
 from app import create_app
 from service_manager.authorization import (
@@ -107,6 +108,119 @@ def test_accessible_services_scopes_non_admin(app):
         op_row = conn.execute("SELECT * FROM users WHERE id=?", (op,)).fetchone()
         assert {r["id"] for r in accessible_services(conn, admin_row)} == {s1, s2}
         assert {r["id"] for r in accessible_services(conn, op_row)} == {s1}
+
+
+def test_service_preferences_persist_order_initial_and_explicit_precedence(app):
+    client = app.test_client()
+    user_id = _user(app, username="ordered")
+    alpha = _service(app, "Alpha")
+    beta = _service(app, "Beta")
+    zulu = _service(app, "Zulu")
+    for service_id in (alpha, beta, zulu):
+        _membership(app, user_id, service_id, "viewer")
+    _set_session(client, user_id=user_id, role="operador")
+
+    initial_body = client.get("/").get_data(as_text=True)
+    assert initial_body.index("Alpha") < initial_body.index("Beta") < initial_body.index("Zulu")
+    assert "Serviço selecionado: <strong class=\"ink-strong\">Alpha</strong>" in initial_body
+
+    response = client.post(
+        "/preferences/services",
+        data=MultiDict([
+            ("service_ids", str(zulu)),
+            ("service_ids", str(alpha)),
+            ("service_ids", str(beta)),
+            ("initial_service_id", str(beta)),
+        ]),
+    )
+    assert response.status_code == 204
+    with app.app_context():
+        conn = get_db()
+        rows = conn.execute(
+            "SELECT service_id, position, is_initial FROM user_service_preferences WHERE user_id=? ORDER BY position",
+            (user_id,),
+        ).fetchall()
+        assert [tuple(row) for row in rows] == [(zulu, 0, 0), (alpha, 1, 0), (beta, 2, 1)]
+        audit = conn.execute(
+            "SELECT target_id, metadata_json FROM audit_events WHERE action='preferences.services_updated'"
+        ).fetchone()
+        assert audit["target_id"] == str(user_id)
+        assert json.loads(audit["metadata_json"]) == {"initial_service_id": beta, "service_count": 3}
+
+    body = client.get("/").get_data(as_text=True)
+    assert "Serviço selecionado: <strong class=\"ink-strong\">Beta</strong>" in body
+    assert body.index(">Zulu</a>") < body.index(">Alpha</a>") < body.index(">Beta</a>")
+    explicit = client.get(f"/?service={alpha}").get_data(as_text=True)
+    assert "Serviço selecionado: <strong class=\"ink-strong\">Alpha</strong>" in explicit
+    with app.app_context():
+        assert get_db().execute(
+            "SELECT service_id FROM user_service_preferences WHERE user_id=? AND is_initial=1",
+            (user_id,),
+        ).fetchone()["service_id"] == beta
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [("service_ids", "1")],
+        [("service_ids", "1"), ("service_ids", "1"), ("initial_service_id", "1")],
+        [("service_ids", "0"), ("initial_service_id", "1")],
+        [("service_ids", "01"), ("initial_service_id", "1")],
+        [("service_ids", "+1"), ("initial_service_id", "1")],
+        [("service_ids", " 1"), ("initial_service_id", "1")],
+        [("service_ids", "١"), ("initial_service_id", "1")],
+        [("service_ids", "1"), ("initial_service_id", "1"), ("initial_service_id", "1")],
+        [("service_ids", "1"), ("initial_service_id", "2")],
+    ],
+)
+def test_invalid_service_preferences_roll_back(app, payload):
+    client = app.test_client()
+    user_id = _user(app, username="invalid")
+    service_id = _service(app, "Alpha")
+    _membership(app, user_id, service_id, "viewer")
+    _set_session(client, user_id=user_id, role="operador")
+    valid = client.post(
+        "/preferences/services",
+        data=MultiDict([("service_ids", str(service_id)), ("initial_service_id", str(service_id))]),
+    )
+    assert valid.status_code == 204
+    response = client.post("/preferences/services", data=MultiDict(payload))
+    assert response.status_code == 400
+    with app.app_context():
+        row = get_db().execute(
+            "SELECT service_id, position, is_initial FROM user_service_preferences WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+        assert tuple(row) == (service_id, 0, 1)
+
+
+def test_service_preference_scope_new_access_and_revoke_cleanup(app):
+    operator = app.test_client()
+    admin_client = app.test_client()
+    admin_id = _user(app, username="root", role="admin")
+    user_id = _user(app, username="scoped")
+    alpha = _service(app, "Alpha")
+    zulu = _service(app, "Zulu")
+    _membership(app, user_id, zulu, "viewer")
+    _set_session(operator, user_id=user_id, role="operador")
+    assert operator.post(
+        "/preferences/services",
+        data=MultiDict([("service_ids", str(zulu)), ("initial_service_id", str(zulu))]),
+    ).status_code == 204
+    _membership(app, user_id, alpha, "viewer")
+    with app.app_context():
+        user = get_db().execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        assert [row["id"] for row in accessible_services(get_db(), user)] == [zulu, alpha]
+
+    _set_session(admin_client, user_id=admin_id, role="admin", reauth=True)
+    assert admin_client.post(f"/admin/service-access/{zulu}/{user_id}/delete").status_code == 204
+    with app.app_context():
+        assert get_db().execute(
+            "SELECT COUNT(*) FROM user_service_preferences WHERE user_id=? AND service_id=?",
+            (user_id, zulu),
+        ).fetchone()[0] == 0
+    body = operator.get("/").get_data(as_text=True)
+    assert "Serviço selecionado: <strong class=\"ink-strong\">Alpha</strong>" in body
 
 
 def test_index_returns_403_for_inaccessible_service_and_404_for_missing(app):

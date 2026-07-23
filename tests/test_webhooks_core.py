@@ -100,6 +100,8 @@ def _insert_config(conn: sqlite3.Connection, url: str, secret_bytes: bytes, *, e
         (HOST, b"x", b"y", 1, b"x", b"y", 1, enabled, now, now, deleted),
     )
     cid = cur.lastrowid
+    if cid is None:
+        raise RuntimeError("webhook insert did not return an id")
     url_enc = encrypt_secret_with_key(DATA_KEY, url, aad=webhook_url_aad(cid))
     secret_b64 = base64.urlsafe_b64encode(secret_bytes).decode("ascii")
     sec_enc = encrypt_secret_with_key(DATA_KEY, secret_b64, aad=webhook_signing_secret_aad(cid))

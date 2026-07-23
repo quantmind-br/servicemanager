@@ -26,6 +26,7 @@ VERIFY = ROOT / "scripts" / "verify_migrated_db.py"
 BACKUP = ROOT / "scripts" / "backup.py"
 RESTORE = ROOT / "scripts" / "restore_backup.py"
 AUTH_MIGRATE = ROOT / "scripts" / "migrate_auth_schema.py"
+SERVICE_PREFERENCES_MIGRATE = ROOT / "scripts" / "migrate_service_preferences.py"
 DATA_KEY = base64.b64encode(b"d" * 32).decode("ascii")
 BACKUP_KEY = base64.b64encode(b"b" * 32).decode("ascii")
 
@@ -140,15 +141,104 @@ def test_auth_schema_migration_exposes_the_approved_api():
 
 def _run_auth_migration(source: Path, target: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AUDIT_KEY_V1", DATA_KEY)
-    migration = _script_module("migrate_auth_schema")
-    migration.migrate(source, target, "AUDIT_KEY_V1")
+    pre_preferences = target.with_name(f".{target.name}.pre-preferences")
+    auth_migration = _script_module("migrate_auth_schema")
+    preferences_migration = _script_module("migrate_service_preferences")
+    try:
+        auth_migration.migrate(source, pre_preferences, "AUDIT_KEY_V1")
+        preferences_migration.migrate(pre_preferences, target, "AUDIT_KEY_V1")
+    finally:
+        pre_preferences.unlink(missing_ok=True)
 
 
-_NEW_CANONICAL_TABLES = {
+def _run_legacy_migration(source: Path, target: Path, *, key_env: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    pre_preferences = target.with_name(f".{target.name}.pre-preferences")
+    first = _run(MIGRATE, "--source", str(source), "--target", str(pre_preferences), "--key-env", key_env, env=env)
+    if first.returncode != 0:
+        return first
+    second = _run(
+        SERVICE_PREFERENCES_MIGRATE,
+        "--source", str(pre_preferences),
+        "--target", str(target),
+        env={**env, "AUDIT_KEY_V1": env[key_env]},
+    )
+    pre_preferences.unlink(missing_ok=True)
+    return second
+
+_PRE_PREFERENCES_TABLES = {
     "accounts", "services", "account_service", "custom_fields", "field_values", "users",
     "security_events", "audit_events", "service_members",
     "webhook_configs", "webhook_subscriptions", "webhook_deliveries", "app_settings",
 }
+_NEW_CANONICAL_TABLES = _PRE_PREFERENCES_TABLES | {"user_service_preferences"}
+
+
+def _pre_service_preferences_source(path: Path) -> None:
+    schema = _script_module("service_preferences_schema").PRE_SERVICE_PREFERENCES_SCHEMA
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(schema)
+        stamp = "2026-01-01T00:00:00Z"
+        conn.execute("INSERT INTO services (id, name) VALUES (9, 'Mail')")
+        conn.execute(
+            "INSERT INTO users (id, username, password_hash, role, created_at, updated_at) VALUES (1, 'admin', 'hash', 'admin', ?, ?)",
+            (stamp, stamp),
+        )
+        conn.execute("INSERT INTO service_members (user_id, service_id, role, created_at) VALUES (1, 9, 'service_admin', ?)", (stamp,))
+        conn.execute("UPDATE sqlite_sequence SET seq=17 WHERE name='services'")
+        conn.execute("UPDATE sqlite_sequence SET seq=11 WHERE name='users'")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_service_preferences_migration_api_and_preservation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    migration = _script_module("migrate_service_preferences")
+    assert list(inspect.signature(migration.migrate).parameters) == ["source_path", "target_path", "audit_key_env"]
+    assert inspect.signature(migration.migrate).parameters["audit_key_env"].default == "AUDIT_KEY_V1"
+    source = tmp_path / "pre-preferences.db"
+    target = tmp_path / "current.db"
+    _pre_service_preferences_source(source)
+    source_conn = sqlite3.connect(source)
+    old_tables = {
+        row[0]
+        for row in source_conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+    }
+    expected_rows = {table: _table_rows(source_conn, table) for table in old_tables}
+    expected_sequences = _table_rows(source_conn, "sqlite_sequence")
+    source_conn.close()
+    monkeypatch.setenv("AUDIT_KEY_V1", DATA_KEY)
+    migration.migrate(source, target)
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    conn = sqlite3.connect(target)
+    try:
+        assert {table: _table_rows(conn, table) for table in old_tables} == expected_rows
+        assert _table_rows(conn, "sqlite_sequence") == expected_sequences
+        assert conn.execute("SELECT COUNT(*) FROM user_service_preferences").fetchone()[0] == 0
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert list(conn.execute("PRAGMA foreign_key_check")) == []
+    finally:
+        conn.close()
+
+    result = _run(
+        SERVICE_PREFERENCES_MIGRATE,
+        "--source", str(source),
+        "--target", str(tmp_path / "cli-current.db"),
+        env={"AUDIT_KEY_V1": DATA_KEY},
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "OK: service preferences schema migrated"
+
+
+def test_service_preferences_migration_rejects_already_migrated_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source = tmp_path / "current.db"
+    target = tmp_path / "other.db"
+    conn = sqlite3.connect(source)
+    conn.executescript(_script_module("migrate_service_preferences").TARGET_SCHEMA)
+    conn.close()
+    monkeypatch.setenv("AUDIT_KEY_V1", DATA_KEY)
+    with pytest.raises(Exception, match="source schema is incompatible|target schema is incompatible"):
+        _script_module("migrate_service_preferences").migrate(source, target)
 
 
 def test_auth_schema_migration_snapshots_wal_and_preserves_every_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -415,7 +505,7 @@ def test_compare_business_data_reports_matching_secret_free_legacy_and_secure_di
     source = tmp_path / "legacy.db"
     secure = tmp_path / "secure.db"
     _legacy_source(source)
-    assert _run(MIGRATE, "--source", str(source), "--target", str(secure), "--key-env", "TEST_DATA_KEY", env={"TEST_DATA_KEY": DATA_KEY}).returncode == 0
+    assert _run_legacy_migration(source, secure, key_env="TEST_DATA_KEY", env={"TEST_DATA_KEY": DATA_KEY}).returncode == 0
 
     comparison = ROOT / "scripts" / "compare_business_data.py"
     legacy = _run(comparison, "legacy", "--database", str(source), env={})
@@ -610,7 +700,7 @@ def test_authenticated_backup_round_trip_rejects_wrong_key_tampering_and_invalid
     encrypted = tmp_path / "source.smbk"
     restored = tmp_path / "restored.db"
     _legacy_source(source)
-    assert _run(MIGRATE, "--source", str(source), "--target", str(secure), "--key-env", "TEST_DATA_KEY", env={"TEST_DATA_KEY": DATA_KEY}).returncode == 0
+    assert _run_legacy_migration(source, secure, key_env="TEST_DATA_KEY", env={"TEST_DATA_KEY": DATA_KEY}).returncode == 0
     secure_digest = hashlib.sha256(secure.read_bytes()).digest()
     backup_env = {"TEST_BACKUP_KEY": BACKUP_KEY, "AUDIT_KEY_V1": DATA_KEY}
 
@@ -641,7 +731,7 @@ def test_backup_refuses_a_secure_snapshot_with_a_broken_audit_chain(tmp_path: Pa
     valid_backup = tmp_path / "valid.smbk"
     rejected_backup = tmp_path / "rejected.smbk"
     _legacy_source(source)
-    assert _run(MIGRATE, "--source", str(source), "--target", str(secure), "--key-env", "TEST_DATA_KEY", env={"TEST_DATA_KEY": DATA_KEY}).returncode == 0
+    assert _run_legacy_migration(source, secure, key_env="TEST_DATA_KEY", env={"TEST_DATA_KEY": DATA_KEY}).returncode == 0
 
     app = create_app(
         {
@@ -790,7 +880,7 @@ def test_restore_success_removes_rollback_artifacts_after_replacing_existing_tar
     encrypted = tmp_path / "source.smbk"
     target = tmp_path / "target.db"
     _legacy_source(source)
-    assert _run(MIGRATE, "--source", str(source), "--target", str(secure), "--key-env", "TEST_DATA_KEY", env={"TEST_DATA_KEY": DATA_KEY}).returncode == 0
+    assert _run_legacy_migration(source, secure, key_env="TEST_DATA_KEY", env={"TEST_DATA_KEY": DATA_KEY}).returncode == 0
     backup_env = {"TEST_BACKUP_KEY": BACKUP_KEY, "AUDIT_KEY_V1": DATA_KEY}
     assert _run(BACKUP, "--source", str(secure), "--target", str(encrypted), "--key-env", "TEST_BACKUP_KEY", env=backup_env).returncode == 0
     target.write_bytes(b"old-target-sentinel")
@@ -1098,7 +1188,7 @@ def test_restore_rejects_incompatible_payloads_and_rolls_back_no_prior_target_si
     source = tmp_path / "source.db"
     secure_target = tmp_path / "secure.db"
     _legacy_source(source)
-    assert _run(MIGRATE, "--source", str(source), "--target", str(secure_target), "--key-env", "TEST_DATA_KEY", env={"TEST_DATA_KEY": DATA_KEY}).returncode == 0
+    assert _run_legacy_migration(source, secure_target, key_env="TEST_DATA_KEY", env={"TEST_DATA_KEY": DATA_KEY}).returncode == 0
 
     legacy_wrong = tmp_path / "legacy-wrong.db"
     _legacy_source(legacy_wrong, accounts=115)
@@ -1137,7 +1227,7 @@ def test_backup_and_restore_roundtrip_after_legitimate_account_deletion(tmp_path
     source = tmp_path / "source.db"
     secure_target = tmp_path / "secure.db"
     _legacy_source(source)
-    assert _run(MIGRATE, "--source", str(source), "--target", str(secure_target), "--key-env", "TEST_DATA_KEY", env={"TEST_DATA_KEY": DATA_KEY}).returncode == 0
+    assert _run_legacy_migration(source, secure_target, key_env="TEST_DATA_KEY", env={"TEST_DATA_KEY": DATA_KEY}).returncode == 0
 
     conn = sqlite3.connect(secure_target)
     conn.execute("PRAGMA foreign_keys = ON")
@@ -1210,7 +1300,7 @@ def test_restore_keeps_rollback_artifact_when_rollback_replacement_fails(tmp_pat
     encrypted = tmp_path / "source.smbk"
     target = tmp_path / "target.db"
     _legacy_source(source)
-    assert _run(MIGRATE, "--source", str(source), "--target", str(secure), "--key-env", "TEST_DATA_KEY", env={"TEST_DATA_KEY": DATA_KEY}).returncode == 0
+    assert _run_legacy_migration(source, secure, key_env="TEST_DATA_KEY", env={"TEST_DATA_KEY": DATA_KEY}).returncode == 0
     assert _run(BACKUP, "--source", str(secure), "--target", str(encrypted), "--key-env", "TEST_BACKUP_KEY", env={"TEST_BACKUP_KEY": BACKUP_KEY, "AUDIT_KEY_V1": DATA_KEY}).returncode == 0
     sentinel = b"original-target-bytes"
     target.write_bytes(sentinel)

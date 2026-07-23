@@ -25,6 +25,7 @@ from service_manager.imports import ImportFormatError, has_allowed_upload_mimety
 from service_manager.authorization import (
     accessible_services,
     get_user_service_role,
+    replace_service_preferences,
     require_account_role,
     require_recent_reauth,
     require_role,
@@ -128,9 +129,11 @@ def _form_error(message: str, *, status: int = 400) -> Response:
     return Response(render_template("form_error.html", message=message), status=status, mimetype="text/html")
 
 
-def selected_service_id(services: list) -> int | None:
+def selected_service_id(services: list, initial_service_id: int | None) -> int | None:
     raw_candidate = request.values.get("service") or request.values.get("service_id")
     if raw_candidate is None:
+        if initial_service_id is not None and any(service["id"] == initial_service_id for service in services):
+            return initial_service_id
         return services[0]["id"] if services else None
     try:
         candidate = int(raw_candidate)
@@ -521,11 +524,53 @@ def healthz() -> ResponseReturnValue:
     return jsonify(status="ok")
 
 
+class _InvalidServicePreferences(ValueError):
+    pass
+
+
+_ASCII_SERVICE_ID = re.compile(r"[1-9][0-9]*\Z", re.ASCII)
+
+
+@routes.post("/preferences/services")
+def service_preferences_update() -> Response:
+    raw_service_ids = request.form.getlist("service_ids")
+    initial_values = request.form.getlist("initial_service_id")
+    if any(_ASCII_SERVICE_ID.fullmatch(value) is None for value in (*raw_service_ids, *initial_values)):
+        return Response("Preferências de serviços inválidas", status=400)
+    service_ids = [int(value) for value in raw_service_ids]
+    if len(service_ids) != len(set(service_ids)):
+        return Response("Preferências de serviços inválidas", status=400)
+    initial_service_id = int(initial_values[0]) if len(initial_values) == 1 else None
+    conn = get_db()
+    try:
+        with transaction(conn):
+            services = accessible_services(conn, g.current_user)
+            accessible_ids = [service["id"] for service in services]
+            if len(initial_values) != (1 if accessible_ids else 0):
+                raise _InvalidServicePreferences
+            if sorted(service_ids) != sorted(accessible_ids):
+                raise _InvalidServicePreferences
+            if initial_service_id is not None and initial_service_id not in service_ids:
+                raise _InvalidServicePreferences
+            replace_service_preferences(conn, g.current_user["id"], service_ids, initial_service_id)
+            _audit(
+                conn,
+                action="preferences.services_updated",
+                target_type="user",
+                target_id=g.current_user["id"],
+                metadata={"service_count": len(service_ids), "initial_service_id": initial_service_id},
+            )
+    except _InvalidServicePreferences:
+        return Response("Preferências de serviços inválidas", status=400)
+    return Response(status=204)
+
+
 @routes.get("/")
 def index() -> str:
     conn = get_db()
     user = g.current_user
     services = accessible_services(conn, user)
+    initial_service_id = next((service["id"] for service in services if service["is_initial"]), None)
     raw_service = request.values.get("service") or request.values.get("service_id")
     if raw_service is not None and not any(str(s["id"]) == raw_service for s in services):
         # A syntactically valid, existing service the caller cannot access -> 403, never fallback.
@@ -536,7 +581,7 @@ def index() -> str:
         if candidate > 0 and conn.execute("SELECT 1 FROM services WHERE id=?", (candidate,)).fetchone() is not None:
             abort(403)
         abort(404)
-    service_id = selected_service_id(services)
+    service_id = selected_service_id(services, initial_service_id)
     service_role = get_user_service_role(conn, user, service_id) if service_id is not None else None
     no_access = user["role"] != "admin" and not services
     can_reveal = service_role in ("admin", "editor", "service_admin")
@@ -560,12 +605,12 @@ def index() -> str:
     if not rot_enabled or rot_filter not in ("", "due_soon", "overdue", "unknown", "current", "no_policy"):
         rot_filter = ""
     service_days = None
+    today = datetime.now(UTC).date()
 
     if service_id is not None:
         if rot_enabled:
             service_days_row = conn.execute("SELECT rotation_days FROM services WHERE id=?", (service_id,)).fetchone()
             service_days = service_days_row["rotation_days"] if service_days_row is not None else None
-            today = datetime.now(UTC).date()
         account_rows = conn.execute(
             """
             SELECT a.id, a.email, a.password_changed_at, link.status, link.registered, link.rotation_days, link.rotation_due_at
@@ -610,8 +655,9 @@ def index() -> str:
             }
             if rot_enabled:
                 rotation = _rotation_state(row["password_changed_at"], row["rotation_days"], row["rotation_due_at"], service_days, today=today)
-                if rotation["state"] in rotation_counts:
-                    rotation_counts[rotation["state"]] += 1
+                rotation_state = str(rotation["state"])
+                if rotation_state in rotation_counts:
+                    rotation_counts[rotation_state] += 1
                 entry.update({
                     "rotation_state": rotation["state"],
                     "rotation_due_at": rotation["due_at"],
@@ -642,7 +688,8 @@ def index() -> str:
         feedback = f"Importação concluída: {added} adicionadas; {skipped} ignoradas."
     elif (ok := request.args.get("ok")) in OK_MESSAGES:
         feedback = OK_MESSAGES[ok]
-    return render_template("index.html", rows=rows, labels=STATUS_LABELS, counts=counts, services=services, current=service_id, current_name=current_name, service_fields=fields, feedback=feedback, feedback_is_error=feedback_is_error, service_role=service_role, capabilities=capabilities, no_access=no_access, rotation_counts=rotation_counts, rot_filter=rot_filter, rotation_labels=ROTATION_LABELS, service_rotation_days=(service_days if service_id is not None else None), rotation_enabled=rot_enabled)
+    effective_initial_service_id = initial_service_id or (services[0]["id"] if services else None)
+    return render_template("index.html", rows=rows, labels=STATUS_LABELS, counts=counts, services=services, current=service_id, current_name=current_name, initial_service_id=effective_initial_service_id, service_fields=fields, feedback=feedback, feedback_is_error=feedback_is_error, service_role=service_role, capabilities=capabilities, no_access=no_access, rotation_counts=rotation_counts, rot_filter=rot_filter, rotation_labels=ROTATION_LABELS, service_rotation_days=(service_days if service_id is not None else None), rotation_enabled=rot_enabled)
 
 
 @routes.post("/add")
@@ -1280,6 +1327,7 @@ def service_access_revoke(service_id: int, user_id: int) -> ResponseReturnValue:
         if existing is None:
             abort(404)
         conn.execute("DELETE FROM service_members WHERE user_id=? AND service_id=?", (user_id, service_id))
+        conn.execute("DELETE FROM user_service_preferences WHERE user_id=? AND service_id=?", (user_id, service_id))
         _audit(conn, action="membership.revoked", target_type="service", target_id=service_id, metadata={"user_id": user_id})
         enqueue_webhook_event(conn, "destructive_admin_action", {"action": "membership.revoked", "target_type": "service", "target_id": service_id, "service_id": service_id, "user_id": user_id})
     return Response(status=204)

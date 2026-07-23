@@ -198,6 +198,44 @@ def test_index_carries_frontend_hooks(app, client):
     assert "onclick=" not in body
 
 
+def test_service_preferences_dialog_hooks_and_literals(app, client):
+    seed_authenticated_secret(app, client)
+    body = client.get("/").get_data(as_text=True)
+    for literal in (
+        'id="service-preferences-dialog"',
+        "data-service-order-list",
+        "data-move-service",
+        "Serviço inicial",
+        "Salvar preferências",
+        "data-no-submit-lock",
+        "data-service-chip",
+        "Organizar serviços",
+    ):
+        assert literal in body
+
+
+def test_service_preferences_script_and_touch_contract(client):
+    script = client.get("/static/js/app.js").get_data(as_text=True)
+    css = client.get("/static/css/app.css").get_data(as_text=True)
+    assert "localStorage" not in script
+    assert "sessionStorage" not in script
+    build = script.index("const body = new URLSearchParams(new FormData(servicePreferencesForm))")
+    disable = script.index("controls.forEach((control) => { control.disabled = true; })", build)
+    assert build < disable
+    for literal in (
+        "Preferências de serviços salvas.",
+        "Preferências de serviços inválidas.",
+        "Não foi possível salvar as preferências.",
+        "restoreServicePreferences",
+        'servicePreferencesDialog.addEventListener("cancel"',
+        'event.target === servicePreferencesDialog',
+    ):
+        assert literal in script
+    coarse = css.index("@media (pointer: coarse)")
+    assert ".service-order-button { width: 2.75rem; height: 2.75rem; }" in css[coarse:]
+    assert "overflow-wrap: anywhere" in css
+
+
 def test_admin_menu_groups_destinations_and_marks_current_page(app, client):
     login = client.post("/login", data={"username": "admin", "password": "admin-password-0123456789"})
     assert login.status_code == 302
@@ -303,8 +341,9 @@ def test_fetch_update_builds_body_before_disabling_control(client):
     # snapshotted before the control is disabled, or status/registered
     # updates POST an empty field and the server 400s.
     script = client.get("/static/js/app.js").get_data(as_text=True)
-    build = script.index("new URLSearchParams(new FormData(form))")
-    disable = script.index("control.disabled = true")
+    fetch_updates = script.index('form.hasAttribute("data-fetch-update")')
+    build = script.index("new URLSearchParams(new FormData(form))", fetch_updates)
+    disable = script.index("control.disabled = true", build)
     assert build < disable
 
 

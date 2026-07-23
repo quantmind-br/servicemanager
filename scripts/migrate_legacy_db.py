@@ -11,12 +11,15 @@ from collections.abc import Callable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from service_manager.db import SCHEMA
+from service_preferences_schema import PRE_SERVICE_PREFERENCES_SCHEMA as TARGET_SCHEMA
 from _secure_db import (
     ScriptError, begin_snapshot, ensure_mode, load_key, open_source_read_only, read_legacy_values,
-    remove_artifacts, remove_sidecars, require_offline_target, secure_schema_valid, sidecars,
+    remove_artifacts, remove_sidecars, require_offline_target, sidecars,
     validate_legacy_source,
 )
+from _migration_io import frozen_schema_objects, structural_schema_valid
+
+_TARGET_OBJECTS, _TARGET_COLUMNS = frozen_schema_objects(TARGET_SCHEMA)
 
 
 def _after_source_snapshot() -> None:
@@ -39,7 +42,7 @@ def parse_args() -> argparse.Namespace:
 
 def _create_schema_in_transaction(conn: sqlite3.Connection) -> None:
     statement = ""
-    for line in SCHEMA.splitlines(keepends=True):
+    for line in TARGET_SCHEMA.splitlines(keepends=True):
         statement += line
         if sqlite3.complete_statement(statement):
             conn.execute(statement)
@@ -50,7 +53,7 @@ def _create_schema_in_transaction(conn: sqlite3.Connection) -> None:
 
 def _validate_target(conn: sqlite3.Connection, key: bytes, source: tuple[list[sqlite3.Row], ...]) -> None:
     services, fields, accounts, links, values = source
-    secure_schema_valid(conn)
+    structural_schema_valid(conn, _TARGET_OBJECTS, _TARGET_COLUMNS)
     comparisons = (
         ("SELECT id, name FROM services ORDER BY id", [tuple(row) for row in services]),
         ("SELECT id, service_id, name FROM custom_fields ORDER BY id", [tuple(row) for row in fields]),

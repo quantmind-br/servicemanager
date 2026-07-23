@@ -16,6 +16,7 @@ __all__ = [
     "SERVICE_ROLE_RANK",
     "get_user_service_role",
     "accessible_services",
+    "replace_service_preferences",
     "require_service_role",
     "require_account_role",
 ]
@@ -41,17 +42,45 @@ def get_user_service_role(conn: sqlite3.Connection, user: Mapping[str, object], 
 def accessible_services(conn: sqlite3.Connection, user: Mapping[str, object]) -> list[sqlite3.Row]:
     """Return the ordered services the caller may see."""
     if _is_global_admin(user):
-        return conn.execute("SELECT id, name FROM services ORDER BY name").fetchall()
+        return conn.execute(
+            """
+            SELECT s.id, s.name, COALESCE(preference.is_initial, 0) AS is_initial
+            FROM services AS s
+            LEFT JOIN user_service_preferences AS preference
+              ON preference.user_id = ? AND preference.service_id = s.id
+            ORDER BY preference.position IS NULL, preference.position, s.name COLLATE NOCASE, s.id
+            """,
+            (user["id"],),
+        ).fetchall()
     return conn.execute(
         """
-        SELECT s.id, s.name
+        SELECT s.id, s.name, COALESCE(preference.is_initial, 0) AS is_initial
         FROM services AS s
         JOIN service_members AS m ON m.service_id = s.id
+        LEFT JOIN user_service_preferences AS preference
+          ON preference.user_id = ? AND preference.service_id = s.id
         WHERE m.user_id = ?
-        ORDER BY s.name
+        ORDER BY preference.position IS NULL, preference.position, s.name COLLATE NOCASE, s.id
         """,
-        (user["id"],),
+        (user["id"], user["id"]),
     ).fetchall()
+
+
+def replace_service_preferences(
+    conn: sqlite3.Connection,
+    user_id: int,
+    ordered_service_ids: list[int],
+    initial_service_id: int | None,
+) -> None:
+    """Replace one user's ordered services and initial service within the caller's transaction."""
+    conn.execute("DELETE FROM user_service_preferences WHERE user_id = ?", (user_id,))
+    conn.executemany(
+        "INSERT INTO user_service_preferences (user_id, service_id, position, is_initial) VALUES (?, ?, ?, ?)",
+        (
+            (user_id, service_id, position, int(service_id == initial_service_id))
+            for position, service_id in enumerate(ordered_service_ids)
+        ),
+    )
 
 
 def _record_authorization_denial(

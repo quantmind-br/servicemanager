@@ -17,9 +17,10 @@
 <section class="service-bar" aria-label="Serviços">
   <nav class="service-chips" aria-label="Selecionar serviço">
     {% for service in services %}
-    <a class="chip{% if service['id'] == current %} is-current{% endif %}" href="{{ url_for('routes.index', service=service['id']) }}"{% if service['id'] == current %} aria-current="page"{% endif %}>{{ service['name'] }}</a>
+    <a class="chip{% if service['id'] == current %} is-current{% endif %}" href="{{ url_for('routes.index', service=service['id']) }}" data-service-chip data-service-id="{{ service['id'] }}"{% if service['id'] == current %} aria-current="page"{% endif %}>{{ service['name'] }}</a>
     {% endfor %}
   </nav>
+  {% if services %}<button type="button" class="button button-small button-quiet" data-service-preferences-open>Organizar serviços</button>{% endif %}
   {% if is_admin %}
   <form class="service-add" method="post" action="{{ url_for('routes.service_add') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -325,6 +326,36 @@
   </div>
   {% else %}<div class="empty-wrap"><p class="empty-state">Nenhuma conta cadastrada neste serviço ainda. Use “Adicionar conta” acima para começar.</p></div>{% endif %}
 </section>
+
+{% if services %}
+<dialog id="service-preferences-dialog" class="account-edit-dialog service-preferences-dialog" aria-labelledby="service-preferences-title">
+  <form method="post" data-service-preferences-form data-no-submit-lock action="{{ url_for('routes.service_preferences_update') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <h3 id="service-preferences-title">Organizar serviços</h3>
+    <p class="muted">Use as setas para definir a ordem de exibição.</p>
+    <ol data-service-order-list>
+      {% for service in services %}
+      <li data-service-order-item data-service-id="{{ service['id'] }}">
+        <input type="hidden" name="service_ids" value="{{ service['id'] }}">
+        <span class="service-order-name">{{ service['name'] }}</span>
+        <span class="service-order-actions">
+          <button class="service-order-button" type="button" data-move-service="up" aria-label="Mover {{ service['name'] }} para cima" title="Mover {{ service['name'] }} para cima"{% if loop.first %} disabled{% endif %}>↑</button>
+          <button class="service-order-button" type="button" data-move-service="down" aria-label="Mover {{ service['name'] }} para baixo" title="Mover {{ service['name'] }} para baixo"{% if loop.last %} disabled{% endif %}>↓</button>
+        </span>
+      </li>
+      {% endfor %}
+    </ol>
+    <label for="initial-service-id">Serviço inicial</label>
+    <select id="initial-service-id" name="initial_service_id" required>
+      {% for service in services %}<option value="{{ service['id'] }}"{% if service['id'] == initial_service_id %} selected{% endif %}>{{ service['name'] }}</option>{% endfor %}
+    </select>
+    <div class="dialog-actions">
+      <button class="button button-small button-quiet" type="button" data-service-preferences-cancel>Cancelar</button>
+      <button class="button button-small" type="submit">Salvar preferências</button>
+    </div>
+  </form>
+</dialog>
+{% endif %}
 
 <dialog id="account-edit-dialog" class="account-edit-dialog" aria-labelledby="edit-dialog-title">
   <form class="edit-form" method="post" data-edit-form data-async-form>

@@ -10,7 +10,7 @@ from pathlib import Path
 EXPECTED_COUNTS = {"accounts": 116, "account_service": 116, "field_values": 116, "credentials_backup": 116}
 EXPECTED_SECURE_TABLES = {
     "accounts", "services", "account_service", "custom_fields", "field_values", "users",
-    "security_events", "audit_events", "service_members",
+    "security_events", "audit_events", "service_members", "user_service_preferences",
     "webhook_configs", "webhook_subscriptions", "webhook_deliveries", "app_settings",
 }
 EXPECTED_SECURE_COLUMNS = {
@@ -23,6 +23,7 @@ EXPECTED_SECURE_COLUMNS = {
     "security_events": {"id", "kind", "subject", "source_ip", "occurred_at"},
     "audit_events": {"id", "occurred_at", "actor_user_id", "action", "target_type", "target_id", "metadata_json", "source_ip", "user_agent", "previous_hash", "event_hash"},
     "service_members": {"user_id", "service_id", "role", "created_at"},
+    "user_service_preferences": {"user_id", "service_id", "position", "is_initial"},
     "webhook_configs": {"id", "destination_host", "url_ciphertext", "url_nonce", "url_key_version", "description", "enabled", "signing_secret_ciphertext", "signing_secret_nonce", "signing_secret_key_version", "created_at", "updated_at", "deleted_at"},
     "webhook_subscriptions": {"config_id", "event_type"},
     "webhook_deliveries": {"id", "config_id", "event_type", "payload_json", "status", "attempt_count", "next_attempt_at", "lease_token", "leased_at", "last_status_code", "last_error", "created_at", "delivered_at"},

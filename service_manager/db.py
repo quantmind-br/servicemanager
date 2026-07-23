@@ -117,6 +117,18 @@ CREATE TABLE service_members (
     FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE CASCADE
 );
 CREATE INDEX service_members_service_id ON service_members(service_id, user_id);
+CREATE TABLE user_service_preferences (
+    user_id INTEGER NOT NULL,
+    service_id INTEGER NOT NULL,
+    position INTEGER NOT NULL CHECK (position >= 0),
+    is_initial INTEGER NOT NULL DEFAULT 0 CHECK (is_initial IN (0, 1)),
+    PRIMARY KEY (user_id, service_id),
+    UNIQUE (user_id, position),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX user_service_preferences_one_initial
+    ON user_service_preferences(user_id) WHERE is_initial = 1;
 CREATE TABLE webhook_configs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     destination_host TEXT NOT NULL,
