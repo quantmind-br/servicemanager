@@ -55,10 +55,10 @@
           <td class="cell-actions">
             <form class="edit-form" method="post" action="{{ url_for('routes.security_integration_update', config_id=config['id']) }}" data-webhook-edit>
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <label class="filter-select">URL nova (deixe em branco para manter)
+              <label class="stacked-field">URL nova (deixe em branco para manter)
                 <input name="url" type="url" maxlength="2048" autocomplete="off" placeholder="https://…">
               </label>
-              <label class="filter-select">Descrição
+              <label class="stacked-field">Descrição
                 <input name="description" type="text" maxlength="200" value="{{ config['description'] }}">
               </label>
               <label class="toggle-inline">

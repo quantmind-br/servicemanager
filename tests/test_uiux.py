@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import re
 import sys
 import time
 from datetime import UTC, datetime
@@ -176,6 +177,11 @@ def test_index_carries_frontend_hooks(app, client):
     # filter meta + clear
     assert 'id="filter-count"' in body
     assert 'id="filter-clear"' in body
+    # column filters relocated into their table headers
+    for name, control_id in (("email", "account-filter"), ("status", "filter-status"), ("registered", "filter-registered")):
+        start = body.index(f'data-column-filter="{name}"')
+        cell = body[start:body.index("</th>", start)]
+        assert f'id="{control_id}"' in cell
     # shared confirm dialog + toast
     assert 'id="confirm-dialog"' in body
     assert 'id="toast"' in body
@@ -190,6 +196,44 @@ def test_index_carries_frontend_hooks(app, client):
     assert "<style" not in body
     assert "<script>" not in body
     assert "onclick=" not in body
+
+
+def test_admin_menu_groups_destinations_and_marks_current_page(app, client):
+    login = client.post("/login", data={"username": "admin", "password": "admin-password-0123456789"})
+    assert login.status_code == 302
+    body = client.get("/admin/users").get_data(as_text=True)
+
+    panel_start = body.index('<nav class="admin-menu-panel"')
+    panel = body[panel_start:body.index("</nav>", panel_start)]
+
+    for href in (
+        "/admin/users",
+        "/admin/service-access",
+        "/admin/audit",
+        "/admin/security-integrations",
+        "/admin/settings",
+    ):
+        assert panel.count(f'href="{href}"') == 1
+    for description in (
+        "Contas e papéis",
+        "Permissões por serviço",
+        "Eventos e integridade",
+        "Alertas de segurança",
+        "Controles globais",
+    ):
+        assert panel.count(description) == 1
+
+    # the current page's item carries both is-current and aria-current, attribute order aside
+    users_anchor = re.search(r'<a\b[^>]*href="/admin/users"[^>]*>', panel)
+    assert users_anchor is not None
+    tag = users_anchor.group(0)
+    assert "admin-menu-item is-current" in tag
+    assert 'aria-current="page"' in tag
+
+    # general actions stay outside the admin panel
+    assert 'href="/coverage"' not in panel
+    assert 'href="/account"' not in panel
+    assert 'action="/logout"' not in panel
 
 
 def test_service_delete_confirm_names_blast_radius_for_admin(app, client):
@@ -408,6 +452,10 @@ def test_css_new_rules(client):
         'th[aria-sort="ascending"]',
         ".coverage-service-label",
         ".rotation-badge",
+        ".admin-menu-panel",
+        ".column-filter",
     ):
         assert rule in css
     assert "bottom: calc(100% + .2rem)" not in css
+    media = css.index("@media (max-width: 48rem)")
+    assert "table.accounts thead tr { display: grid" in css[media:]

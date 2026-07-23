@@ -44,37 +44,6 @@
 </section>
 
 <div class="table-controls">
-  <label class="filter-field">
-    <span class="sr-only">Filtrar contas</span>
-    <input id="account-filter" type="search" placeholder="Filtrar contas…" autocomplete="off">
-  </label>
-  <div class="column-filters" role="group" aria-label="Filtrar por coluna">
-    <label class="filter-select">Status
-      <select id="filter-status">
-        <option value="">Todos</option>
-        {% for sval, slabel in labels.items() %}<option value="{{ sval }}">{{ slabel }}</option>{% endfor %}
-      </select>
-    </label>
-    <label class="filter-select">Cadastro
-      <select id="filter-registered">
-        <option value="">Todos</option>
-        <option value="1">Cadastrada</option>
-        <option value="0">Não cadastrada</option>
-      </select>
-    </label>
-    {% if rotation_enabled %}
-    <label class="filter-select">Rotação
-      <select id="filter-rotation">
-        <option value="">Todas</option>
-        <option value="overdue">{{ rotation_labels['overdue'] }}</option>
-        <option value="due_soon">{{ rotation_labels['due_soon'] }}</option>
-        <option value="current">{{ rotation_labels['current'] }}</option>
-        <option value="no_policy">{{ rotation_labels['no_policy'] }}</option>
-        <option value="unknown">{{ rotation_labels['unknown'] }}</option>
-      </select>
-    </label>
-    {% endif %}
-  </div>
   <div class="filter-meta">
     <span id="filter-count" class="muted" aria-live="polite"></span>
     <button id="filter-clear" class="button button-quiet button-small" type="button" hidden>Limpar filtros</button>
@@ -153,11 +122,51 @@
       <thead>
         <tr>
           {% if capabilities['edit'] or is_admin %}<th scope="col" class="cell-select"><input type="checkbox" id="select-visible" aria-label="Selecionar contas visíveis"></th>{% else %}<th scope="col" class="cell-select" aria-hidden="true"></th>{% endif %}
-          <th scope="col" data-sort-col aria-sort="none"><button type="button" class="th-sort" data-sort="email">Email</button></th>
+          <th scope="col" class="filterable-column filter-email" data-column-filter="email" data-sort-col aria-sort="none">
+            <div class="column-heading">
+              <span class="column-heading-label"><button type="button" class="th-sort" data-sort="email">Email</button></span>
+              <span class="column-filter"><input id="account-filter" type="search" placeholder="Buscar email ou campo…" autocomplete="off" aria-label="Filtrar por email ou campo adicional"></span>
+            </div>
+          </th>
           <th scope="col">Senha</th>
-          <th scope="col" data-sort-col aria-sort="none"><button type="button" class="th-sort" data-sort="status">Status</button></th>
-          <th scope="col">Cadastro</th>
-          {% if rotation_enabled %}<th scope="col">Rotação</th>{% endif %}
+          <th scope="col" class="filterable-column filter-status" data-column-filter="status" data-sort-col aria-sort="none">
+            <div class="column-heading">
+              <span class="column-heading-label"><button type="button" class="th-sort" data-sort="status">Status</button></span>
+              <span class="column-filter">
+                <select id="filter-status" aria-label="Filtrar por status">
+                  <option value="">Todos</option>
+                  {% for sval, slabel in labels.items() %}<option value="{{ sval }}">{{ slabel }}</option>{% endfor %}
+                </select>
+              </span>
+            </div>
+          </th>
+          <th scope="col" class="filterable-column filter-registered" data-column-filter="registered">
+            <div class="column-heading">
+              <span class="column-heading-label">Cadastro</span>
+              <span class="column-filter">
+                <select id="filter-registered" aria-label="Filtrar por cadastro">
+                  <option value="">Todos</option>
+                  <option value="1">Cadastrada</option>
+                  <option value="0">Não cadastrada</option>
+                </select>
+              </span>
+            </div>
+          </th>
+          {% if rotation_enabled %}<th scope="col" class="filterable-column filter-rotation" data-column-filter="rotation">
+            <div class="column-heading">
+              <span class="column-heading-label">Rotação</span>
+              <span class="column-filter">
+                <select id="filter-rotation" aria-label="Filtrar por rotação">
+                  <option value="">Todas</option>
+                  <option value="overdue">{{ rotation_labels['overdue'] }}</option>
+                  <option value="due_soon">{{ rotation_labels['due_soon'] }}</option>
+                  <option value="current">{{ rotation_labels['current'] }}</option>
+                  <option value="no_policy">{{ rotation_labels['no_policy'] }}</option>
+                  <option value="unknown">{{ rotation_labels['unknown'] }}</option>
+                </select>
+              </span>
+            </div>
+          </th>{% endif %}
           <th scope="col">Ações</th>
         </tr>
       </thead>

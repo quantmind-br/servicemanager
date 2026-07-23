@@ -17,14 +17,35 @@
     <span class="muted header-user">{{ g.current_user['username'] }}{% if g.current_user['role'] == 'admin' %} · admin{% endif %}</span>
     <div class="header-actions">
       {% if g.current_user['role'] == 'admin' %}
-      <a class="button button-quiet" href="{{ url_for('auth.users') }}">Usuários</a>
-      <a class="button button-quiet" href="{{ url_for('routes.service_access') }}">Acessos</a>
-      <a class="button button-quiet" href="{{ url_for('routes.audit_view') }}">Auditoria</a>
-      <a class="button button-quiet" href="{{ url_for('routes.security_integrations') }}">Integrações</a>
-      <a class="button button-quiet" href="{{ url_for('routes.settings_view') }}">Configurações</a>
+      {% set admin_endpoints = ['auth.users', 'routes.service_access', 'routes.audit_view', 'routes.security_integrations', 'routes.settings_view'] %}
+      <details class="admin-menu{% if request.endpoint in admin_endpoints %} is-current{% endif %}">
+        <summary class="admin-menu-trigger">Administração</summary>
+        <nav class="admin-menu-panel" aria-label="Administração">
+          <a class="admin-menu-item{% if request.endpoint == 'auth.users' %} is-current{% endif %}" href="{{ url_for('auth.users') }}"{% if request.endpoint == 'auth.users' %} aria-current="page"{% endif %}>
+            <span class="admin-menu-item-label">Usuários</span>
+            <span class="admin-menu-item-description">Contas e papéis</span>
+          </a>
+          <a class="admin-menu-item{% if request.endpoint == 'routes.service_access' %} is-current{% endif %}" href="{{ url_for('routes.service_access') }}"{% if request.endpoint == 'routes.service_access' %} aria-current="page"{% endif %}>
+            <span class="admin-menu-item-label">Acessos</span>
+            <span class="admin-menu-item-description">Permissões por serviço</span>
+          </a>
+          <a class="admin-menu-item{% if request.endpoint == 'routes.audit_view' %} is-current{% endif %}" href="{{ url_for('routes.audit_view') }}"{% if request.endpoint == 'routes.audit_view' %} aria-current="page"{% endif %}>
+            <span class="admin-menu-item-label">Auditoria</span>
+            <span class="admin-menu-item-description">Eventos e integridade</span>
+          </a>
+          <a class="admin-menu-item{% if request.endpoint == 'routes.security_integrations' %} is-current{% endif %}" href="{{ url_for('routes.security_integrations') }}"{% if request.endpoint == 'routes.security_integrations' %} aria-current="page"{% endif %}>
+            <span class="admin-menu-item-label">Integrações</span>
+            <span class="admin-menu-item-description">Alertas de segurança</span>
+          </a>
+          <a class="admin-menu-item{% if request.endpoint == 'routes.settings_view' %} is-current{% endif %}" href="{{ url_for('routes.settings_view') }}"{% if request.endpoint == 'routes.settings_view' %} aria-current="page"{% endif %}>
+            <span class="admin-menu-item-label">Configurações</span>
+            <span class="admin-menu-item-description">Controles globais</span>
+          </a>
+        </nav>
+      </details>
       {% endif %}
-      <a class="button button-quiet" href="{{ url_for('routes.coverage') }}">Visão geral</a>
-      <a class="button button-quiet" href="{{ url_for('auth.account') }}">Minha conta</a>
+      <a class="button button-quiet{% if request.endpoint == 'routes.coverage' %} is-current{% endif %}" href="{{ url_for('routes.coverage') }}"{% if request.endpoint == 'routes.coverage' %} aria-current="page"{% endif %}>Visão geral</a>
+      <a class="button button-quiet{% if request.endpoint == 'auth.account' %} is-current{% endif %}" href="{{ url_for('auth.account') }}"{% if request.endpoint == 'auth.account' %} aria-current="page"{% endif %}>Minha conta</a>
       <form class="logout-form" method="post" action="{{ url_for('auth.logout') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button class="button button-quiet" type="submit">Sair</button>

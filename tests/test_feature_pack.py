@@ -806,6 +806,9 @@ def test_index_shows_rotation_column_counts_and_filter(app, client):
 
     body = client.get(f"/?service={service_id}").get_data(as_text=True)
     assert 'id="filter-rotation"' in body
+    rot_start = body.index('data-column-filter="rotation"')
+    rot_th = body[rot_start:body.index("</th>", rot_start)]
+    assert 'id="filter-rotation"' in rot_th
     assert 'data-rotation="overdue"' in body
     assert "data-rotation-overdue-count" in body
     assert 'href="/rotation?service=' in body
@@ -924,6 +927,7 @@ def test_index_hides_rotation_column_and_filter_when_disabled(app, client):
     service_id, _ = _seed_link(app)
     body = client.get(f"/?service={service_id}").get_data(as_text=True)
     assert 'id="filter-rotation"' not in body
+    assert 'data-column-filter="rotation"' not in body
     assert "cell-rotation" not in body
     assert "data-rotation=" not in body
     assert "Ver rotação" not in body
