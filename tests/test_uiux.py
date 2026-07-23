@@ -341,7 +341,7 @@ def test_app_js_new_behaviors(client):
 
     for literal in (
         "response.redirected",
-        '"…"',
+        "is-loading",
         "toast toast-error",
         "is-copied",
         "#row-",

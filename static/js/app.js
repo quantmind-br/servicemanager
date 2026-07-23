@@ -100,7 +100,7 @@
     const mask = cell.querySelector("[data-secret-mask]");
     if (mask) { mask.textContent = "••••••••"; mask.classList.remove("is-expiring"); }
     const showButton = cell.querySelector("[data-secret-show]");
-    if (showButton) showButton.textContent = "Exibir";
+    if (showButton) { showButton.classList.remove("is-revealed", "is-loading"); showButton.disabled = false; showButton.setAttribute("aria-label", "Exibir senha"); showButton.setAttribute("title", "Exibir senha"); }
   };
 
   const restoreAllMasks = () => {
@@ -141,13 +141,16 @@
         return;
       }
       button.disabled = true;
-      button.textContent = "…";
+      button.classList.add("is-loading");
       try {
         const { controller, value, expiresIn } = await fetchSecret(cell);
         if (controller.signal.aborted || document.hidden) return;
         const mask = cell.querySelector("[data-secret-mask]");
         if (mask) mask.textContent = value;
-        button.textContent = "Ocultar";
+        button.classList.remove("is-loading");
+        button.classList.add("is-revealed");
+        button.setAttribute("aria-label", "Ocultar senha");
+        button.setAttribute("title", "Ocultar senha");
         const timer = window.setTimeout(() => restoreMask(cell), Math.min(expiresIn, 30) * 1000 || 30000);
         const warnTimer = window.setTimeout(() => { const m = cell.querySelector("[data-secret-mask]"); if (m) m.classList.add("is-expiring"); }, Math.max((Math.min(expiresIn, 30) - 5) * 1000, 0));
         secretState.set(cell, { controller, timer, warnTimer, revealed: true });
@@ -156,7 +159,7 @@
         restoreMask(cell);
         showToast(error?.status === 429 ? "Limite de revelações atingido. Aguarde alguns minutos." : "Não foi possível exibir a senha.");
       } finally {
-        if (button.textContent === "…") button.textContent = "Exibir";
+        button.classList.remove("is-loading");
         button.disabled = false;
       }
     });
