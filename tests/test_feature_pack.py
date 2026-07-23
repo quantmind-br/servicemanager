@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import base64
+import csv
 import io
 import json
 from pathlib import Path
 import re
 import sys
 import time
+
+from openpyxl import load_workbook
 
 import pytest
 
@@ -259,65 +262,182 @@ def test_index_renders_bulk_field_and_typed_delete_hooks(app, client):
     assert 'id="bulk-add-field"' in editor_body
     assert 'id="bulk-field-dialog"' in editor_body
 
-def seed_export_data(app) -> int:
+def _make_member(app, username, role, service_id, password="member-password-012345") -> int:
+    with app.app_context():
+        conn = get_db()
+        from service_manager.crypto import hash_password
+
+        stamp = conn.execute("SELECT created_at FROM users WHERE username='admin'").fetchone()[0]
+        uid = inserted_id(conn.execute(
+            "INSERT INTO users (username, password_hash, role, is_active, must_change_password, created_at, updated_at) VALUES (?, ?, 'operador', 1, 0, ?, ?)",
+            (username, hash_password(password), stamp, stamp),
+        ))
+        conn.execute(
+            "INSERT INTO service_members (user_id, service_id, role, created_at) VALUES (?, ?, ?, '2026-01-01T00:00:00+00:00')",
+            (uid, service_id, role),
+        )
+        conn.commit()
+    return uid
+
+
+def reauth(client, password=ADMIN_PASSWORD) -> None:
+    assert client.post("/reauth", data={"password": password}).status_code == 204
+
+
+def seed_export_data(app) -> tuple[int, list[str], list[list[str]]]:
+    """Seed a service with two accounts and three custom fields.
+
+    Returns ``(service_id, header, rows)`` describing the exact export matrix.
+    """
     with app.app_context():
         conn = get_db()
         service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Export')"))
-        account_id = inserted_id(conn.execute(
+        # Account 1: password and account email both begin with a formula char.
+        acc1 = inserted_id(conn.execute(
             "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
             ("=formula@example.test", b"", b"0" * 12),
         ))
-        password = encrypt_secret("clear-password-must-not-export", aad=account_password_aad(account_id))
-        conn.execute(
-            "UPDATE accounts SET password_ciphertext=?, password_nonce=? WHERE id=?",
-            (password.ciphertext, password.nonce, account_id),
-        )
-        conn.execute(
-            "INSERT INTO account_service (account_id, service_id, status, registered) VALUES (?, ?, 'ativo', 1)",
-            (account_id, service_id),
-        )
-        field_id = inserted_id(conn.execute("INSERT INTO custom_fields (service_id, name) VALUES (?, 'API key')", (service_id,)))
-        field = encrypt_secret("clear-field-must-not-export", aad=account_field_aad(account_id, field_id))
+        pw1 = encrypt_secret("=secret-pw-1", aad=account_password_aad(acc1))
+        conn.execute("UPDATE accounts SET password_ciphertext=?, password_nonce=? WHERE id=?", (pw1.ciphertext, pw1.nonce, acc1))
+        conn.execute("INSERT INTO account_service (account_id, service_id, status, registered) VALUES (?, ?, 'ativo', 1)", (acc1, service_id))
+        # Account 2: no field associations.
+        acc2 = inserted_id(conn.execute(
+            "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
+            ("second@example.test", b"", b"0" * 12),
+        ))
+        pw2 = encrypt_secret("plain-pw-2", aad=account_password_aad(acc2))
+        conn.execute("UPDATE accounts SET password_ciphertext=?, password_nonce=? WHERE id=?", (pw2.ciphertext, pw2.nonce, acc2))
+        conn.execute("INSERT INTO account_service (account_id, service_id, status, registered) VALUES (?, ?, 'nunca', 0)", (acc2, service_id))
+        # Three fields; ORDER BY name (BINARY) => 'API key', 'Vazio', 'email'.
+        for name, value in (("API key", "key-value-123"), ("email", "=EMAIL_FORMULA"), ("Vazio", "")):
+            fid = inserted_id(conn.execute("INSERT INTO custom_fields (service_id, name) VALUES (?, ?)", (service_id, name)))
+            enc = encrypt_secret(value, aad=account_field_aad(acc1, fid))
+            conn.execute(
+                "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, 1)",
+                (fid, acc1, enc.ciphertext, enc.nonce),
+            )
+        # A filled field on a different service must never leak into this export.
+        other_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Other')"))
+        other_field = inserted_id(conn.execute("INSERT INTO custom_fields (service_id, name) VALUES (?, 'Segredo alheio')", (other_id,)))
+        conn.execute("INSERT INTO account_service (account_id, service_id, status, registered) VALUES (?, ?, 'ativo', 0)", (acc1, other_id))
+        other_val = encrypt_secret("outro-servico-secreto", aad=account_field_aad(acc1, other_field))
         conn.execute(
             "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, 1)",
-            (field_id, account_id, field.ciphertext, field.nonce),
+            (other_field, acc1, other_val.ciphertext, other_val.nonce),
         )
         conn.commit()
-        return service_id
+    header = ["email", "password", "status", "cadastrada", "campo:API key", "campo:Vazio", "campo:email"]
+    rows = [
+        ["'=formula@example.test", "'=secret-pw-1", "ativo", "sim", "key-value-123", "", "'=EMAIL_FORMULA"],
+        ["second@example.test", "plain-pw-2", "nunca", "não", "", "", ""],
+    ]
+    return service_id, header, rows
 
 
-def test_safe_csv_export_contains_no_secret_values(app, client):
+def test_csv_export_reveals_matrix_only_after_reauth(app, client):
     login_admin(client)
-    service_id = seed_export_data(app)
+    service_id, header, rows = seed_export_data(app)
+    reauth(client)
 
     response = client.get(f"/export.csv?service={service_id}")
 
     assert response.status_code == 200
     assert response.mimetype == "text/csv"
-    body = response.get_data(as_text=True)
-    assert "email,status,cadastrada,campos" in body
-    assert "'=formula@example.test" in body
-    assert "API key" in body
-    assert "clear-password-must-not-export" not in body
-    assert "clear-field-must-not-export" not in body
+    disp = response.headers["Content-Disposition"]
+    assert f"filename=contas_export_{service_id}_" in disp and disp.endswith(".csv")
+    assert response.headers["Cache-Control"] == "no-store, private"
+    assert response.headers["Pragma"] == "no-cache"
+    text = response.get_data(as_text=True)
+    assert text.startswith("\ufeff")
+    reader = list(csv.reader(io.StringIO(text.lstrip("\ufeff"))))
+    assert reader[0] == header
+    assert reader[1:] == rows
+    # Nothing from the other service leaks.
+    assert "Segredo alheio" not in text
+    assert "outro-servico-secreto" not in text
 
 
-def test_safe_xlsx_export_uses_xlsx_mimetype(app, client):
+def test_xlsx_export_matches_csv_matrix_after_reauth(app, client):
     login_admin(client)
-    service_id = seed_export_data(app)
+    service_id, header, rows = seed_export_data(app)
+    reauth(client)
 
     response = client.get(f"/export.xlsx?service={service_id}")
 
     assert response.status_code == 200
     assert response.mimetype == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    disp = response.headers["Content-Disposition"]
+    assert f"filename=contas_export_{service_id}_" in disp and disp.endswith(".xlsx")
+    assert response.headers["Cache-Control"] == "no-store, private"
+    assert response.headers["Pragma"] == "no-cache"
+    workbook = load_workbook(io.BytesIO(response.get_data()), read_only=True, data_only=True)
+    sheet = workbook.active
+    assert sheet is not None
+    matrix = []
+    for row in sheet.iter_rows(values_only=True):
+        cells = ["" if cell is None else str(cell) for cell in row]
+        cells += [""] * (len(header) - len(cells))
+        matrix.append(cells)
+    workbook.close()
+    assert matrix[0] == header
+    assert matrix[1:] == rows
 
 
-def test_safe_exports_require_admin(app, client):
-    service_id = seed_export_data(app)
+@pytest.mark.parametrize("ext", ["csv", "xlsx"])
+def test_export_forbidden_below_service_admin(app, client, ext):
+    service_id, _, _ = seed_export_data(app)
+    # Plain operator with no membership.
     login_operator(app, client)
+    with client.session_transaction() as session:
+        session["reauthenticated_at"] = time.time()
+    assert client.get(f"/export.{ext}?service={service_id}").status_code == 403
+    client.post("/logout")
+    # Viewer and editor members remain below service_admin.
+    _make_member(app, "viewer-x", "viewer", service_id)
+    _make_member(app, "editor-x", "editor", service_id)
+    for username in ("viewer-x", "editor-x"):
+        assert client.post("/login", data={"username": username, "password": "member-password-012345"}).status_code == 302
+        with client.session_transaction() as session:
+            session["reauthenticated_at"] = time.time()
+        assert client.get(f"/export.{ext}?service={service_id}").status_code == 403
+        client.post("/logout")
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) FROM audit_events WHERE action='accounts.exported'").fetchone()[0] == 0
 
-    assert client.get(f"/export.csv?service={service_id}").status_code == 403
-    assert client.get(f"/export.xlsx?service={service_id}").status_code == 403
+
+@pytest.mark.parametrize("ext", ["csv", "xlsx"])
+def test_admin_export_requires_recent_reauth(app, client, ext):
+    login_admin(client)
+    service_id, _, _ = seed_export_data(app)
+    # Admin without recent reauth is rejected and nothing is audited.
+    assert client.get(f"/export.{ext}?service={service_id}").status_code == 403
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) FROM audit_events WHERE action='accounts.exported'").fetchone()[0] == 0
+    reauth(client)
+    response = client.get(f"/export.{ext}?service={service_id}")
+    assert response.status_code == 200
+    with app.app_context():
+        events = get_db().execute("SELECT metadata_json FROM audit_events WHERE action='accounts.exported'").fetchall()
+    assert len(events) == 1
+    assert json.loads(events[0]["metadata_json"]) == {"rows": 2, "format": ext}
+
+
+@pytest.mark.parametrize("ext", ["csv", "xlsx"])
+def test_service_admin_member_exports_after_reauth(app, client, ext):
+    service_id, _, _ = seed_export_data(app)
+    _make_member(app, "svc-admin", "service_admin", service_id)
+    assert client.post("/login", data={"username": "svc-admin", "password": "member-password-012345"}).status_code == 302
+    # No reauth yet: rejected and unaudited.
+    assert client.get(f"/export.{ext}?service={service_id}").status_code == 403
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) FROM audit_events WHERE action='accounts.exported'").fetchone()[0] == 0
+    reauth(client, password="member-password-012345")
+    response = client.get(f"/export.{ext}?service={service_id}")
+    assert response.status_code == 200
+    with app.app_context():
+        events = get_db().execute("SELECT metadata_json FROM audit_events WHERE action='accounts.exported'").fetchall()
+    assert len(events) == 1
+    assert json.loads(events[0]["metadata_json"]) == {"rows": 2, "format": ext}
 
 
 def test_export_filename_slugs_name_with_id_and_utc_timestamp(app, client):
@@ -326,29 +446,37 @@ def test_export_filename_slugs_name_with_id_and_utc_timestamp(app, client):
         conn = get_db()
         service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Serviço Especial!!')"))
         conn.commit()
+    reauth(client)
 
     csv_resp = client.get(f"/export.csv?service={service_id}")
     xlsx_resp = client.get(f"/export.xlsx?service={service_id}")
 
-    import re as _re
     for resp, ext in ((csv_resp, "csv"), (xlsx_resp, "xlsx")):
+        assert resp.status_code == 200
         disp = resp.headers["Content-Disposition"]
-        assert _re.search(rf"filename=contas_servico_especial_{service_id}_\d{{8}}T\d{{6}}Z\.{ext}", disp), disp
+        assert re.search(rf"filename=contas_servico_especial_{service_id}_\d{{8}}T\d{{6}}Z\.{ext}", disp), disp
 
 
-def test_export_rejects_over_ten_thousand_without_audit(app, client):
+def test_export_limit_rejects_over_limit_without_audit(app, client, monkeypatch):
+    import service_manager.routes as routes_module
+
+    assert routes_module._EXPORT_LIMIT == 10000
+    monkeypatch.setattr(routes_module, "_EXPORT_LIMIT", 2)
     login_admin(client)
+    reauth(client)
+    account_ids: list[int] = []
     with app.app_context():
         conn = get_db()
         service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Big')"))
-        conn.executemany(
-            "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
-            [(f"user{n}@x.test", b"", b"0" * 12) for n in range(10001)],
-        )
-        conn.execute(
-            "INSERT INTO account_service (account_id, service_id, status, registered) SELECT id, ?, 'nunca', 0 FROM accounts",
-            (service_id,),
-        )
+        for n in range(3):
+            aid = inserted_id(conn.execute(
+                "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
+                (f"user{n}@x.test", b"", b"0" * 12),
+            ))
+            envelope = encrypt_secret(f"pw-{n}", aad=account_password_aad(aid))
+            conn.execute("UPDATE accounts SET password_ciphertext=?, password_nonce=? WHERE id=?", (envelope.ciphertext, envelope.nonce, aid))
+            conn.execute("INSERT INTO account_service (account_id, service_id, status, registered) VALUES (?, ?, 'nunca', 0)", (aid, service_id))
+            account_ids.append(aid)
         conn.commit()
 
     over = client.get(f"/export.csv?service={service_id}")
@@ -358,14 +486,38 @@ def test_export_rejects_over_ten_thousand_without_audit(app, client):
 
     with app.app_context():
         conn = get_db()
-        victim = conn.execute("SELECT id FROM accounts ORDER BY id DESC LIMIT 1").fetchone()["id"]
-        conn.execute("DELETE FROM account_service WHERE account_id=?", (victim,))
+        conn.execute("DELETE FROM account_service WHERE account_id=?", (account_ids[-1],))
         conn.commit()
     exact = client.get(f"/export.csv?service={service_id}")
     assert exact.status_code == 200
-    assert exact.get_data(as_text=True).count("\n") >= 10000
+    reader = list(csv.reader(io.StringIO(exact.get_data(as_text=True).lstrip("\ufeff"))))
+    assert len(reader) == 3  # header + two accounts
     with app.app_context():
         assert get_db().execute("SELECT COUNT(*) FROM audit_events WHERE action='accounts.exported'").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("target", ["password_ciphertext", "password_nonce", "field_ciphertext", "field_nonce"])
+def test_export_corrupt_envelope_fails_without_audit(app, client, target):
+    login_admin(client)
+    service_id, _, _ = seed_export_data(app)
+    reauth(client)
+    with app.app_context():
+        conn = get_db()
+        acc = conn.execute("SELECT id FROM accounts WHERE email='=formula@example.test'").fetchone()["id"]
+        if target == "password_ciphertext":
+            conn.execute("UPDATE accounts SET password_ciphertext=? WHERE id=?", (b"\x00tampered-ciphertext", acc))
+        elif target == "password_nonce":
+            conn.execute("UPDATE accounts SET password_nonce=? WHERE id=?", (b"z" * 12, acc))
+        elif target == "field_ciphertext":
+            conn.execute("UPDATE field_values SET value_ciphertext=? WHERE account_id=?", (b"\x00tampered-ciphertext", acc))
+        else:
+            conn.execute("UPDATE field_values SET value_nonce=? WHERE account_id=?", (b"z" * 12, acc))
+        conn.commit()
+
+    response = client.get(f"/export.csv?service={service_id}")
+    assert response.status_code == 500
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) FROM audit_events WHERE action='accounts.exported'").fetchone()[0] == 0
 
 
 def seed_bulk_data(app) -> tuple[int, list[int], int]:

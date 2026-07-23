@@ -15,7 +15,7 @@ from collections.abc import Iterator, Mapping
 from typing import Any
 
 from service_manager.auth import consume_reveal_allowance, normalize_email, now_text, source_ip
-from flask import Blueprint, Response, abort, current_app, g, jsonify, redirect, render_template, request, send_file, stream_with_context, url_for
+from flask import Blueprint, Response, abort, current_app, g, jsonify, redirect, render_template, request, send_file, url_for
 from flask.typing import ResponseReturnValue
 from service_manager.audit import append_audit_event, verify_audit_chain
 
@@ -196,35 +196,65 @@ def _export_row_count(conn, service_id: int) -> int:
     ).fetchone()["n"]
 
 
-def _iter_export_rows(conn, service_id: int) -> Iterator[tuple[str, str, str, str]]:
-    for row in conn.execute(
+def _export_fields(conn: sqlite3.Connection, service_id: int) -> tuple[tuple[int, str], ...]:
+    return tuple(
+        (row["id"], row["name"])
+        for row in conn.execute(
+            "SELECT id, name FROM custom_fields WHERE service_id = ? ORDER BY name", (service_id,)
+        )
+    )
+
+
+def _iter_export_rows(
+    conn: sqlite3.Connection, service_id: int, fields: tuple[tuple[int, str], ...]
+) -> Iterator[tuple[str, ...]]:
+    field_ids = [field_id for field_id, _ in fields]
+    values = iter(())
+    if fields:
+        values = conn.execute(
+            """
+            SELECT a.id AS account_id, value.field_id,
+                   value.value_ciphertext, value.value_nonce, value.value_key_version
+            FROM field_values AS value
+            JOIN custom_fields AS field ON field.id = value.field_id
+            JOIN account_service AS link ON link.account_id = value.account_id
+            JOIN accounts AS a ON a.id = value.account_id
+            WHERE field.service_id = ? AND link.service_id = ?
+            ORDER BY a.email COLLATE NOCASE, field.name
+            """,
+            (service_id, service_id),
+        )
+    pending = next(values, None)
+    for account in conn.execute(
         """
-        SELECT
-            a.email,
-            link.status,
-            link.registered,
-            (
-                SELECT group_concat(name, '; ')
-                FROM (
-                    SELECT field.name
-                    FROM field_values AS value
-                    JOIN custom_fields AS field ON field.id = value.field_id
-                    WHERE value.account_id = a.id AND field.service_id = ?
-                    ORDER BY field.name
-                )
-            ) AS field_names
+        SELECT a.id AS account_id, a.email,
+               a.password_ciphertext, a.password_nonce, a.password_key_version,
+               link.status, link.registered
         FROM account_service AS link
         JOIN accounts AS a ON a.id = link.account_id
         WHERE link.service_id = ?
         ORDER BY a.email COLLATE NOCASE
         """,
-        (service_id, service_id),
+        (service_id,),
     ):
+        account_id = account["account_id"]
+        current: dict[int, str] = {}
+        while pending is not None and pending["account_id"] == account_id:
+            current[pending["field_id"]] = decrypt_secret(
+                EncryptedValue(pending["value_ciphertext"], pending["value_nonce"], pending["value_key_version"]),
+                aad=account_field_aad(account_id, pending["field_id"]),
+            )
+            pending = next(values, None)
+        password = decrypt_secret(
+            EncryptedValue(account["password_ciphertext"], account["password_nonce"], account["password_key_version"]),
+            aad=account_password_aad(account_id),
+        )
         yield (
-            _sanitize_cell(row["email"]),
-            _sanitize_cell(row["status"]),
-            "sim" if row["registered"] else "não",
-            _sanitize_cell(row["field_names"] or ""),
+            _sanitize_cell(account["email"]),
+            _sanitize_cell(password),
+            _sanitize_cell(account["status"]),
+            "sim" if account["registered"] else "não",
+            *(_sanitize_cell(current.get(field_id, "")) for field_id in field_ids),
         )
 
 
@@ -756,34 +786,40 @@ def export_csv() -> ResponseReturnValue:
     conn = get_db()
     service_id = required_query_service_id()
     require_service_role(conn, service_id, "service_admin")
+    require_recent_reauth()
     count = _export_row_count(conn, service_id)
     if count > _EXPORT_LIMIT:
         return _form_error("Exportação limitada a 10000 contas.", status=413)
-    with transaction(conn):
-        _audit(conn, action="accounts.exported", target_type="service", target_id=service_id, metadata={"rows": count, "format": "csv"})
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     slug = _safe_filename_slug(_service_name(conn, service_id))
     filename = f"contas_{slug}_{service_id}_{stamp}.csv"
-
-    def generate() -> Iterator[bytes]:
-        buffer = io.StringIO()
+    fields = _export_fields(conn, service_id)
+    headers = ("email", "password", "status", "cadastrada", *(_sanitize_cell(f"campo:{name}") for _, name in fields))
+    spool = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+    try:
+        buffer = io.StringIO(newline="")
         writer = csv.writer(buffer)
-        yield "\ufeff".encode("utf-8")
-        writer.writerow(("email", "status", "cadastrada", "campos"))
-        yield buffer.getvalue().encode("utf-8")
-        buffer.seek(0)
-        buffer.truncate(0)
-        for row in _iter_export_rows(get_db(), service_id):
-            writer.writerow(row)
-            yield buffer.getvalue().encode("utf-8")
+
+        def _flush() -> None:
+            spool.write(buffer.getvalue().encode("utf-8"))
             buffer.seek(0)
             buffer.truncate(0)
 
-    return Response(
-        stream_with_context(generate()),
-        mimetype="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
-    )
+        spool.write("\ufeff".encode("utf-8"))
+        writer.writerow(headers)
+        _flush()
+        for row in _iter_export_rows(conn, service_id, fields):
+            writer.writerow(row)
+            _flush()
+        spool.seek(0)
+        response = send_file(spool, mimetype="text/csv", as_attachment=True, download_name=filename)
+        response.call_on_close(spool.close)
+        with transaction(conn):
+            _audit(conn, action="accounts.exported", target_type="service", target_id=service_id, metadata={"rows": count, "format": "csv"})
+        return response
+    except Exception:
+        spool.close()
+        raise
 
 
 @routes.get("/export.xlsx")
@@ -793,30 +829,37 @@ def export_xlsx() -> ResponseReturnValue:
     conn = get_db()
     service_id = required_query_service_id()
     require_service_role(conn, service_id, "service_admin")
+    require_recent_reauth()
     count = _export_row_count(conn, service_id)
     if count > _EXPORT_LIMIT:
         return _form_error("Exportação limitada a 10000 contas.", status=413)
-    with transaction(conn):
-        _audit(conn, action="accounts.exported", target_type="service", target_id=service_id, metadata={"rows": count, "format": "xlsx"})
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     slug = _safe_filename_slug(_service_name(conn, service_id))
     filename = f"contas_{slug}_{service_id}_{stamp}.xlsx"
-    workbook = Workbook(write_only=True)
-    worksheet = workbook.create_sheet()
-    worksheet.append(("email", "status", "cadastrada", "campos"))
-    for row in _iter_export_rows(conn, service_id):
-        worksheet.append(row)
+    fields = _export_fields(conn, service_id)
+    headers = ("email", "password", "status", "cadastrada", *(_sanitize_cell(f"campo:{name}") for _, name in fields))
     spool = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
-    workbook.save(spool)
-    spool.seek(0)
-    response = send_file(
-        spool,
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        as_attachment=True,
-        download_name=filename,
-    )
-    response.call_on_close(spool.close)
-    return response
+    try:
+        workbook = Workbook(write_only=True)
+        worksheet = workbook.create_sheet()
+        worksheet.append(headers)
+        for row in _iter_export_rows(conn, service_id, fields):
+            worksheet.append(row)
+        workbook.save(spool)
+        spool.seek(0)
+        response = send_file(
+            spool,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=filename,
+        )
+        response.call_on_close(spool.close)
+        with transaction(conn):
+            _audit(conn, action="accounts.exported", target_type="service", target_id=service_id, metadata={"rows": count, "format": "xlsx"})
+        return response
+    except Exception:
+        spool.close()
+        raise
 
 
 
