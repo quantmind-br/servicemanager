@@ -44,6 +44,7 @@ def test_new_database_has_the_exact_username_only_secure_schema(app):
         "webhook_configs",
         "webhook_subscriptions",
         "webhook_deliveries",
+        "app_settings",
     }
     expected_user_columns = {
         "id",
@@ -65,6 +66,9 @@ def test_new_database_has_the_exact_username_only_secure_schema(app):
         assert table_columns(conn, "users") == expected_user_columns
         assert not tables & forbidden
         assert conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'bootstrap_tokens_one_active'").fetchone() is None
+        assert table_columns(conn, "app_settings") == {"key", "value"}
+        # A fresh database has no settings rows; the rotation control defaults to disabled.
+        assert conn.execute("SELECT COUNT(*) FROM app_settings").fetchone()[0] == 0
         assert {"password_ciphertext", "password_nonce", "password_key_version"} <= table_columns(conn, "accounts")
         assert "password" not in table_columns(conn, "accounts")
         assert {"value_ciphertext", "value_nonce", "value_key_version"} <= table_columns(conn, "field_values")
@@ -118,6 +122,13 @@ def test_feature_pack_schema_columns_constraints_indexes_and_delivery_mutability
         assert table_columns(conn, "service_members") == {"user_id", "service_id", "role", "created_at"}
         indexes = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
         assert {"service_members_service_id", "webhook_deliveries_status_next_attempt", "webhook_deliveries_config_created"} <= indexes
+        # app_settings key/value CHECKs reject unknown keys and non-binary values.
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO app_settings (key, value) VALUES ('bogus_key', '1')")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO app_settings (key, value) VALUES ('rotation_enabled', '2')")
+        conn.execute("INSERT INTO app_settings (key, value) VALUES ('rotation_enabled', '1')")
+        conn.execute("DELETE FROM app_settings")
         # security_events kind CHECK accepts the new kinds.
         for kind in ("reveal_blocked", "audit_degraded"):
             conn.execute("INSERT INTO security_events (kind, subject, source_ip, occurred_at) VALUES (?, 's', '127.0.0.1', '2026-01-01T00:00:00Z')", (kind,))

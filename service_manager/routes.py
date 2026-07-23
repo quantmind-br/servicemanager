@@ -63,6 +63,7 @@ OK_MESSAGES = {
     "rotation_policy_updated": "Política de rotação atualizada.",
     "rotation_completed": "Rotação concluída.",
     "rotation_incomplete": "Rotação marcada como pendente.",
+    "settings_updated": "Configurações atualizadas.",
 }
 ROTATION_LABELS = {
     "unknown": "Desconhecido",
@@ -224,6 +225,27 @@ def _iter_export_rows(conn, service_id: int) -> Iterator[tuple[str, str, str, st
 
 
 _ROTATION_MAX_DAYS = 3650
+
+
+def rotation_enabled(conn) -> bool:
+    """Whether the global credential-rotation control is enabled. Defaults to disabled."""
+    row = conn.execute("SELECT value FROM app_settings WHERE key='rotation_enabled'").fetchone()
+    return row is not None and row["value"] == "1"
+
+
+def require_rotation_enabled(conn) -> None:
+    """Abort 404 when the rotation feature is globally disabled."""
+    if not rotation_enabled(conn):
+        abort(404)
+
+
+def set_rotation_enabled(conn, enabled: bool) -> None:
+    """Persist the global rotation flag. Caller owns the transaction."""
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('rotation_enabled', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        ("1" if enabled else "0",),
+    )
 
 
 def _parse_rotation_days(value: str | None) -> tuple[bool, int | None]:
@@ -529,18 +551,21 @@ def index() -> str:
         "export": can_export,
         "delete": can_delete,
     }
+    rot_enabled = rotation_enabled(conn)
     rows: list[dict[str, object]] = []
     fields: list[Any] = []
     counts = {status: 0 for status in STATUS_ORDER}
     rotation_counts = {"due_soon": 0, "overdue": 0}
     rot_filter = request.args.get("rot") or ""
-    if rot_filter not in ("", "due_soon", "overdue", "unknown", "current", "no_policy"):
+    if not rot_enabled or rot_filter not in ("", "due_soon", "overdue", "unknown", "current", "no_policy"):
         rot_filter = ""
+    service_days = None
 
     if service_id is not None:
-        service_days_row = conn.execute("SELECT rotation_days FROM services WHERE id=?", (service_id,)).fetchone()
-        service_days = service_days_row["rotation_days"] if service_days_row is not None else None
-        today = datetime.now(UTC).date()
+        if rot_enabled:
+            service_days_row = conn.execute("SELECT rotation_days FROM services WHERE id=?", (service_id,)).fetchone()
+            service_days = service_days_row["rotation_days"] if service_days_row is not None else None
+            today = datetime.now(UTC).date()
         account_rows = conn.execute(
             """
             SELECT a.id, a.email, a.password_changed_at, link.status, link.registered, link.rotation_days, link.rotation_due_at
@@ -576,22 +601,26 @@ def index() -> str:
             )
         for row in sorted(account_rows, key=lambda account: (STATUS_ORDER.get(account["status"], 1), account["email"].lower())):
             counts[row["status"]] += 1
-            rotation = _rotation_state(row["password_changed_at"], row["rotation_days"], row["rotation_due_at"], service_days, today=today)
-            if rotation["state"] in rotation_counts:
-                rotation_counts[rotation["state"]] += 1
-            rows.append({
+            entry = {
                 "id": row["id"],
                 "email": row["email"],
                 "status": row["status"],
                 "registered": bool(row["registered"]),
                 "fields": field_names[row["id"]],
-                "rotation_state": rotation["state"],
-                "rotation_due_at": rotation["due_at"],
-                "rotation_days_remaining": rotation["days_remaining"],
-                "rotation_effective_days": rotation["effective_days"],
-                "rotation_days_link": row["rotation_days"],
-                "rotation_due_at_link": row["rotation_due_at"],
-            })
+            }
+            if rot_enabled:
+                rotation = _rotation_state(row["password_changed_at"], row["rotation_days"], row["rotation_due_at"], service_days, today=today)
+                if rotation["state"] in rotation_counts:
+                    rotation_counts[rotation["state"]] += 1
+                entry.update({
+                    "rotation_state": rotation["state"],
+                    "rotation_due_at": rotation["due_at"],
+                    "rotation_days_remaining": rotation["days_remaining"],
+                    "rotation_effective_days": rotation["effective_days"],
+                    "rotation_days_link": row["rotation_days"],
+                    "rotation_due_at_link": row["rotation_due_at"],
+                })
+            rows.append(entry)
     counts["total"] = len(rows)
     current_name = next((service["name"] for service in services if service["id"] == service_id), None)
     feedback = None
@@ -613,7 +642,7 @@ def index() -> str:
         feedback = f"Importação concluída: {added} adicionadas; {skipped} ignoradas."
     elif (ok := request.args.get("ok")) in OK_MESSAGES:
         feedback = OK_MESSAGES[ok]
-    return render_template("index.html", rows=rows, labels=STATUS_LABELS, counts=counts, services=services, current=service_id, current_name=current_name, service_fields=fields, feedback=feedback, feedback_is_error=feedback_is_error, service_role=service_role, capabilities=capabilities, no_access=no_access, rotation_counts=rotation_counts, rot_filter=rot_filter, rotation_labels=ROTATION_LABELS, service_rotation_days=(service_days if service_id is not None else None))
+    return render_template("index.html", rows=rows, labels=STATUS_LABELS, counts=counts, services=services, current=service_id, current_name=current_name, service_fields=fields, feedback=feedback, feedback_is_error=feedback_is_error, service_role=service_role, capabilities=capabilities, no_access=no_access, rotation_counts=rotation_counts, rot_filter=rot_filter, rotation_labels=ROTATION_LABELS, service_rotation_days=(service_days if service_id is not None else None), rotation_enabled=rot_enabled)
 
 
 @routes.post("/add")
@@ -769,6 +798,7 @@ def import_bulk() -> ResponseReturnValue:
     added = skipped = 0
     try:
         with transaction(conn):
+            changed_at = now_text()
             emails = {row["email"].casefold() for row in conn.execute("SELECT email FROM accounts")}
             for email, password, status in normalized_records:
                 if email.casefold() in emails:
@@ -777,7 +807,7 @@ def import_bulk() -> ResponseReturnValue:
                 emails.add(email.casefold())
                 account_id = inserted_id(conn.execute(
                     "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version, password_changed_at) VALUES (?, ?, ?, ?, ?)",
-                    (email, b"", b"0" * 12, 1, now_text()),
+                    (email, b"", b"0" * 12, 1, changed_at),
                 ))
                 conn.execute(
                     "UPDATE accounts SET password_ciphertext=?, password_nonce=?, password_key_version=? WHERE id=?",
@@ -805,10 +835,9 @@ def update(item_id: int) -> ResponseReturnValue:
     try:
         with transaction(conn):
             if password:
-                now = now_text()
                 conn.execute(
                     "UPDATE accounts SET email=?, password_ciphertext=?, password_nonce=?, password_key_version=?, password_changed_at=? WHERE id=?",
-                    (email, *encrypted_account_password(item_id, password), now, item_id),
+                    (email, *encrypted_account_password(item_id, password), now_text(), item_id),
                 )
                 # A real password change clears every service link's explicit due-date override.
                 conn.execute("UPDATE account_service SET rotation_due_at=NULL WHERE account_id=?", (item_id,))
@@ -854,6 +883,7 @@ def update_registered(item_id: int) -> ResponseReturnValue:
 @routes.post("/service/<int:service_id>/rotation-policy")
 def service_rotation_policy(service_id: int) -> ResponseReturnValue:
     conn = get_db()
+    require_rotation_enabled(conn)
     if conn.execute("SELECT 1 FROM services WHERE id=?", (service_id,)).fetchone() is None:
         abort(404)
     require_service_role(conn, service_id, "service_admin")
@@ -869,6 +899,7 @@ def service_rotation_policy(service_id: int) -> ResponseReturnValue:
 @routes.post("/accounts/<int:account_id>/rotation-policy")
 def account_rotation_policy(account_id: int) -> ResponseReturnValue:
     conn = get_db()
+    require_rotation_enabled(conn)
     service_id = required_service_id()
     require_account_role(conn, account_id, service_id, "editor")
     days_ok, days = _parse_rotation_days(request.form.get("rotation_days"))
@@ -887,6 +918,7 @@ def account_rotation_policy(account_id: int) -> ResponseReturnValue:
 @routes.get("/rotation")
 def rotation_view() -> ResponseReturnValue:
     conn = get_db()
+    require_rotation_enabled(conn)
     service_id = required_query_service_id()
     granted = require_service_role(conn, service_id, "viewer")
     service_row = conn.execute("SELECT name, rotation_days FROM services WHERE id=?", (service_id,)).fetchone()
@@ -926,6 +958,7 @@ def rotation_view() -> ResponseReturnValue:
 @routes.post("/accounts/<int:account_id>/rotation")
 def complete_rotation(account_id: int) -> ResponseReturnValue:
     conn = get_db()
+    require_rotation_enabled(conn)
     service_id = required_service_id()
     require_account_role(conn, account_id, service_id, "editor")
     outcome = request.form.get("outcome", "")
@@ -1382,3 +1415,26 @@ def security_integration_test(config_id: int) -> ResponseReturnValue:
             metadata={"destination_host": config["destination_host"], "enabled": bool(config["enabled"])},
         )
     return Response(status=204)
+
+
+@routes.get("/admin/settings")
+@require_role("admin")
+def settings_view() -> ResponseReturnValue:
+    conn = get_db()
+    feedback = OK_MESSAGES.get(request.args.get("ok") or "")
+    return Response(
+        render_template("settings.html", rotation_enabled=rotation_enabled(conn), feedback=feedback),
+        headers={"Cache-Control": "no-store, private"},
+    )
+
+
+@routes.post("/admin/settings")
+@require_role("admin")
+def settings_update() -> ResponseReturnValue:
+    require_recent_reauth()
+    conn = get_db()
+    enabled = request.form.get("rotation_enabled") in {"1", "true", "on"}
+    with transaction(conn):
+        set_rotation_enabled(conn, enabled)
+        _audit(conn, action="settings.rotation_enabled_updated", target_type="setting", target_id="rotation_enabled", metadata={"enabled": enabled})
+    return redirect(url_for("routes.settings_view", ok="settings_updated"))

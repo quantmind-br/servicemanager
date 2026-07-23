@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Configurações · Service Manager{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">Administração</p>
+  <h1>Configurações</h1>
+  <p class="muted">Controle global de funcionalidades do cofre.</p>
+  {% if feedback %}<p class="feedback" role="status" data-feedback>{{ feedback }}</p>{% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-heading">
+    <h2>Rotação de credenciais</h2>
+    <p>Quando desativada, as colunas, filtros, política e conclusão de rotação ficam ocultos e os endpoints de rotação retornam 404. As datas de troca de senha continuam sendo registradas normalmente, de modo que reativar retoma o controle a partir do histórico real.</p>
+  </div>
+  <form method="post" action="{{ url_for('routes.settings_update') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label class="toggle-inline">
+      <input type="checkbox" name="rotation_enabled" value="1"{% if rotation_enabled %} checked{% endif %}>
+      Habilitar controle de rotação de credenciais
+    </label>
+    <div class="dialog-actions">
+      <button class="button" type="submit">Salvar</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

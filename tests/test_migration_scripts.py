@@ -147,7 +147,7 @@ def _run_auth_migration(source: Path, target: Path, monkeypatch: pytest.MonkeyPa
 _NEW_CANONICAL_TABLES = {
     "accounts", "services", "account_service", "custom_fields", "field_values", "users",
     "security_events", "audit_events", "service_members",
-    "webhook_configs", "webhook_subscriptions", "webhook_deliveries",
+    "webhook_configs", "webhook_subscriptions", "webhook_deliveries", "app_settings",
 }
 
 

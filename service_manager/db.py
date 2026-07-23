@@ -156,6 +156,10 @@ CREATE TABLE webhook_deliveries (
 );
 CREATE INDEX webhook_deliveries_status_next_attempt ON webhook_deliveries(status, next_attempt_at, id);
 CREATE INDEX webhook_deliveries_config_created ON webhook_deliveries(config_id, created_at);
+CREATE TABLE app_settings (
+    key TEXT PRIMARY KEY CHECK (key IN ('rotation_enabled')),
+    value TEXT NOT NULL CHECK (value IN ('0', '1'))
+);
 """
 
 def _schema_objects(conn: sqlite3.Connection, type_: str) -> dict[str, str]:

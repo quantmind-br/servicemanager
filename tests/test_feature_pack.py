@@ -64,6 +64,13 @@ def login_operator(app, client) -> None:
     assert response.status_code == 302
 
 
+def enable_rotation(app) -> None:
+    with app.app_context():
+        conn = get_db()
+        conn.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('rotation_enabled', '1')")
+        conn.commit()
+
+
 from datetime import date
 from service_manager.routes import _parse_rotation_days, _parse_rotation_due_at, _rotation_state
 
@@ -656,6 +663,7 @@ def test_coverage_matrix_requires_authentication(client):
 def _seed_rotation_account(app, *, email="rot@example.test", password_changed_at=None, service_days=None, link_days=None, due_at=None):
     with app.app_context():
         conn = get_db()
+        conn.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('rotation_enabled', '1')")
         service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Rotate')"))
         if service_days is not None:
             conn.execute("UPDATE services SET rotation_days=? WHERE id=?", (service_days, service_id))
@@ -853,3 +861,169 @@ def test_add_and_import_set_password_changed_at(app, client):
     with app.app_context():
         ts = get_db().execute("SELECT password_changed_at FROM accounts WHERE email='imported@example.test'").fetchone()[0]
         assert ts is not None
+
+
+def _seed_link(app, *, service_name="Frozen", email="frozen@example.test", changed_at="2020-01-01T00:00:00+00:00", link_days=30, due_at="2026-08-01"):
+    """Seed a service+account+link WITHOUT enabling rotation (feature off by default)."""
+    with app.app_context():
+        conn = get_db()
+        service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES (?)", (service_name,)))
+        account_id = inserted_id(conn.execute(
+            "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version, password_changed_at) VALUES (?, ?, ?, 1, ?)",
+            (email, b"x", b"0" * 12, changed_at),
+        ))
+        conn.execute(
+            "INSERT INTO account_service (account_id, service_id, status, registered, rotation_days, rotation_due_at) VALUES (?, ?, 'ativo', 1, ?, ?)",
+            (account_id, service_id, link_days, due_at),
+        )
+        conn.commit()
+    return service_id, account_id
+
+
+def test_rotation_disabled_by_default_gates_every_endpoint(app, client):
+    login_admin(client)
+    service_id, account_id = _seed_link(app)
+    # All four rotation endpoints return 404 while the feature is globally disabled.
+    assert client.get(f"/rotation?service={service_id}").status_code == 404
+    assert client.post(f"/service/{service_id}/rotation-policy", data={"rotation_days": "45"}).status_code == 404
+    assert client.post(f"/accounts/{account_id}/rotation-policy", data={"service_id": service_id, "rotation_days": "15"}).status_code == 404
+    assert client.post(f"/accounts/{account_id}/rotation", data={"service_id": service_id, "outcome": "completed", "new_password": "x-very-secret-value"}).status_code == 404
+    # The gate precedes payload validation: even malformed requests 404, not 400.
+    assert client.post(f"/accounts/{account_id}/rotation", data={"service_id": service_id, "outcome": "bogus"}).status_code == 404
+    assert client.post("/service/999999/rotation-policy", data={"rotation_days": "10"}).status_code == 404
+
+
+def test_disabled_rotation_posts_mutate_nothing_and_leave_no_audit(app, client):
+    login_admin(client)
+    service_id, account_id = _seed_link(app)
+    with app.app_context():
+        conn = get_db()
+        before = conn.execute("SELECT password_ciphertext, password_changed_at FROM accounts WHERE id=?", (account_id,)).fetchone()
+        svc_before = conn.execute("SELECT rotation_days FROM services WHERE id=?", (service_id,)).fetchone()[0]
+        link_before = conn.execute("SELECT rotation_days, rotation_due_at FROM account_service WHERE account_id=? AND service_id=?", (account_id, service_id)).fetchone()
+        audit_before = conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0]
+
+    client.post(f"/service/{service_id}/rotation-policy", data={"rotation_days": "45"})
+    client.post(f"/accounts/{account_id}/rotation-policy", data={"service_id": service_id, "rotation_days": "15", "rotation_due_at": "2026-09-09"})
+    client.post(f"/accounts/{account_id}/rotation", data={"service_id": service_id, "outcome": "completed", "new_password": "brand-new-secret-value"})
+
+    with app.app_context():
+        conn = get_db()
+        after = conn.execute("SELECT password_ciphertext, password_changed_at FROM accounts WHERE id=?", (account_id,)).fetchone()
+        assert after["password_ciphertext"] == before["password_ciphertext"]
+        assert after["password_changed_at"] == before["password_changed_at"]
+        assert conn.execute("SELECT rotation_days FROM services WHERE id=?", (service_id,)).fetchone()[0] == svc_before
+        link_after = conn.execute("SELECT rotation_days, rotation_due_at FROM account_service WHERE account_id=? AND service_id=?", (account_id, service_id)).fetchone()
+        assert (link_after["rotation_days"], link_after["rotation_due_at"]) == (link_before["rotation_days"], link_before["rotation_due_at"])
+        assert conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == audit_before
+        assert conn.execute("SELECT COUNT(*) FROM audit_events WHERE action LIKE 'rotation.%'").fetchone()[0] == 0
+
+
+def test_index_hides_rotation_column_and_filter_when_disabled(app, client):
+    login_admin(client)
+    service_id, _ = _seed_link(app)
+    body = client.get(f"/?service={service_id}").get_data(as_text=True)
+    assert 'id="filter-rotation"' not in body
+    assert "cell-rotation" not in body
+    assert "data-rotation=" not in body
+    assert "Ver rotação" not in body
+    assert body.count("<th scope") == 6
+
+
+def test_add_and_import_record_password_changed_at_regardless_of_flag(app, client):
+    # password_changed_at is factual data, always recorded; the flag only gates the feature surface.
+    login_admin(client)
+    with app.app_context():
+        service_id = inserted_id(get_db().execute("INSERT INTO services (name) VALUES ('OnboardOff')"))
+        get_db().commit()
+    assert client.post("/add", data={"service_id": service_id, "email": "off-created@example.test", "password": "created-secret-value", "status": "ativo"}).status_code == 302
+    csv_bytes = b"email,password,status\noff-imported@example.test,imported-secret,ativo\n"
+    assert client.post("/import", data={"service_id": str(service_id), "file": (io.BytesIO(csv_bytes), "accounts.csv")}, content_type="multipart/form-data").status_code == 302
+    with app.app_context():
+        conn = get_db()
+        assert conn.execute("SELECT password_changed_at FROM accounts WHERE email='off-created@example.test'").fetchone()[0] is not None
+        assert conn.execute("SELECT password_changed_at FROM accounts WHERE email='off-imported@example.test'").fetchone()[0] is not None
+
+
+def test_update_password_records_fresh_timestamp_even_when_disabled(app, client):
+    # A real password change always advances password_changed_at and clears due overrides,
+    # so re-enabling never inherits a stale "last changed" date for a freshly rotated secret.
+    login_admin(client)
+    service_id, account_id = _seed_link(app, email="freeze-upd@example.test")
+    with app.app_context():
+        before = get_db().execute("SELECT password_ciphertext, password_changed_at FROM accounts WHERE id=?", (account_id,)).fetchone()
+    resp = client.post(f"/accounts/{account_id}", data={"service_id": service_id, "email": "freeze-upd@example.test", "password": "rotated-off-secret-value"})
+    assert resp.status_code == 302
+    with app.app_context():
+        conn = get_db()
+        after = conn.execute("SELECT password_ciphertext, password_changed_at FROM accounts WHERE id=?", (account_id,)).fetchone()
+        assert after["password_ciphertext"] != before["password_ciphertext"]
+        assert after["password_changed_at"] != before["password_changed_at"]
+        assert after["password_changed_at"] is not None
+        due = conn.execute("SELECT rotation_due_at FROM account_service WHERE account_id=? AND service_id=?", (account_id, service_id)).fetchone()[0]
+        assert due is None
+        meta = json.loads(conn.execute("SELECT metadata_json FROM audit_events WHERE action='account.updated' ORDER BY id DESC LIMIT 1").fetchone()[0])
+        assert meta["password_changed"] is True
+
+
+def test_enabling_rotation_resumes_from_preexisting_metadata(app, client):
+    login_admin(client)
+    # Pre-existing account with real history/policy captured before the feature was toggled.
+    service_id, account_id = _seed_link(app, email="resume@example.test", changed_at="2020-01-01T00:00:00+00:00", link_days=30, due_at=None)
+    enable_rotation(app)
+    # The overdue state is computed from the preserved timestamp+policy, not reset to unknown.
+    body = client.get(f"/rotation?service={service_id}").get_data(as_text=True)
+    assert "resume@example.test" in body
+    assert 'data-rotation="overdue"' in body
+
+
+def test_settings_view_reflects_state_and_requires_admin(app, client):
+    login_admin(client)
+    body = client.get("/admin/settings").get_data(as_text=True)
+    assert "Rotação de credenciais" in body
+    assert 'name="rotation_enabled"' in body
+    # No checkbox checked while disabled.
+    assert "checked" not in body.split('name="rotation_enabled"')[1].split(">")[0]
+    # Operator is denied the admin settings page.
+    client.post("/logout")
+    login_operator(app, client)
+    assert client.get("/admin/settings").status_code == 403
+
+
+def test_settings_update_requires_reauth_then_toggles(app, client):
+    login_admin(client)
+    # Without a recent reauth the POST is refused and nothing is persisted.
+    assert client.post("/admin/settings", data={"rotation_enabled": "1"}).status_code == 403
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) FROM app_settings WHERE key='rotation_enabled'").fetchone()[0] == 0
+    # With a recent reauth the toggle persists and audits.
+    with client.session_transaction() as session:
+        session["reauthenticated_at"] = time.time()
+    resp = client.post("/admin/settings", data={"rotation_enabled": "1"})
+    assert resp.status_code == 302 and "ok=settings_updated" in resp.headers["Location"]
+    with app.app_context():
+        conn = get_db()
+        assert conn.execute("SELECT value FROM app_settings WHERE key='rotation_enabled'").fetchone()[0] == "1"
+        meta = json.loads(conn.execute("SELECT metadata_json FROM audit_events WHERE action='settings.rotation_enabled_updated' ORDER BY id DESC LIMIT 1").fetchone()[0])
+        assert meta == {"enabled": True}
+    # Now the rotation endpoints are reachable.
+    with app.app_context():
+        sid = inserted_id(get_db().execute("INSERT INTO services (name) VALUES ('AfterToggle')"))
+        get_db().commit()
+    assert client.get(f"/rotation?service={sid}").status_code == 200
+    # Unchecking disables again.
+    with client.session_transaction() as session:
+        session["reauthenticated_at"] = time.time()
+    assert client.post("/admin/settings", data={}).status_code == 302
+    with app.app_context():
+        assert get_db().execute("SELECT value FROM app_settings WHERE key='rotation_enabled'").fetchone()[0] == "0"
+    assert client.get(f"/rotation?service={sid}").status_code == 404
+
+
+def test_settings_operator_post_is_forbidden(app, client):
+    login_operator(app, client)
+    with client.session_transaction() as session:
+        session["reauthenticated_at"] = time.time()
+    assert client.post("/admin/settings", data={"rotation_enabled": "1"}).status_code == 403
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) FROM app_settings").fetchone()[0] == 0
