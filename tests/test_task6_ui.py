@@ -96,13 +96,22 @@ def test_authenticated_listing_uses_external_assets_and_excludes_the_account_pas
     assert 'href="/static/css/app.css?v=' in body
     assert 'src="/static/js/app.js?v=' in body
     assert "known-secret" not in body
-    assert "known-field-secret" in body
-    assert "nota pública" in body
+    assert "known-field-secret" not in body
+    assert "nota pública" not in body
     assert f"/api/accounts/{account_id}/secrets/password/reveal" in body
     assert f"/api/accounts/{account_id}/fields/{field_id}/reveal" not in body
     assert "<style" not in body
     assert "<script>" not in body
     assert "onclick=" not in body
+
+    detail = client.get(f"/accounts/{account_id}/details?service={service_id}")
+    assert detail.status_code == 200
+    assert detail.headers["Cache-Control"] == "no-store, private"
+    fragment = detail.get_data(as_text=True)
+    assert "known-field-secret" in fragment
+    assert "nota pública" in fragment
+    assert "known-secret" not in fragment
+    assert f"/api/accounts/{account_id}/fields/{field_id}/reveal" not in fragment
 
 def test_response_security_headers_are_strict_and_hsts_requires_production_https(app, client):
     service_id, _, _ = seed_authenticated_secret(app, client)
@@ -244,13 +253,22 @@ def test_listing_restores_management_forms_without_prefilling_secrets(app, clien
     assert f'data-update-url="/accounts/{account_id}"' in body
     assert f'action="/accounts/{account_id}/status"' in body
     assert f'action="/delete/{account_id}"' in body
-    assert 'action="/field/add"' in body
-    assert f'action="/field/update/{field_id}/{account_id}"' in body
-    assert f'action="/field/delete/{field_id}/{account_id}"' in body
     assert 'action="/import"' in body
     assert body.count('name="csrf_token"') >= 8
     assert 'value="known-secret"' not in body
-    assert 'value="known-field-secret"' in body
+    # Field-level forms and values live in the lazily loaded detail fragment.
+    assert 'action="/field/add"' not in body
+    assert 'value="known-field-secret"' not in body
+
+    detail = client.get(f"/accounts/{account_id}/details?service={service_id}")
+    assert detail.status_code == 200
+    assert detail.headers["Cache-Control"] == "no-store, private"
+    fragment = detail.get_data(as_text=True)
+    assert 'action="/field/add"' in fragment
+    assert f'action="/field/update/{field_id}/{account_id}"' in fragment
+    assert f'action="/field/delete/{field_id}/{account_id}"' in fragment
+    assert 'value="known-field-secret"' in fragment
+    assert 'value="known-secret"' not in fragment
 
 
 def test_proxy_fix_trusts_forwarded_https_for_production_hsts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -313,7 +331,9 @@ def test_tabular_listing_exposes_filter_expansion_and_inline_controls(app, clien
     body = client.get(f"/?service={service_id}").get_data(as_text=True)
 
     assert 'id="account-filter"' in body
-    assert 'data-search=' in body
+    # PERF-001: the text filter is email-only; it no longer embeds custom-field plaintext.
+    assert 'data-search=' not in body
+    assert 'aria-label="Filtrar por email"' in body
     assert f'aria-controls="detail-{account_id}"' in body
     assert f'id="detail-{account_id}"' in body
     assert 'data-autosubmit' in body

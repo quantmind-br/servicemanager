@@ -7,12 +7,12 @@ import unicodedata
 from datetime import UTC, datetime
 from datetime import date, timedelta
 import re
-from collections import defaultdict
 import sqlite3
 import socket
 
 from collections.abc import Iterator, Mapping
 from typing import Any
+from itsdangerous import BadSignature, URLSafeSerializer
 
 from service_manager.auth import consume_reveal_allowance, normalize_email, now_text, source_ip
 from flask import Blueprint, Response, abort, current_app, g, jsonify, redirect, render_template, request, send_file, url_for
@@ -27,6 +27,7 @@ from service_manager.authorization import (
     get_user_service_role,
     replace_service_preferences,
     require_account_role,
+    require_accounts_role,
     require_recent_reauth,
     require_role,
     require_service_role,
@@ -34,7 +35,6 @@ from service_manager.authorization import (
 )
 from service_manager.webhooks import (
     WebhookError,
-    count_active_configs,
     create_webhook_config,
     delete_webhook_config,
     enqueue_webhook_event,
@@ -79,6 +79,102 @@ TEMPLATE_ROWS = [
     ("exemplo1@gmail.com", "SenhaSegura1", "nunca"),
     ("exemplo2@gmail.com", "SenhaSegura2", "ativo"),
 ]
+
+_ACCOUNT_PAGE_SIZE = 100
+_COVERAGE_PAGE_SIZE = 100
+_STATUS_RANK_SQL = "CASE link.status WHEN 'ativo' THEN 0 WHEN 'nunca' THEN 1 WHEN 'inativo' THEN 2 ELSE 1 END"
+_ACCOUNT_SELECT = (
+    "SELECT a.id AS id, a.email AS email, a.password_changed_at AS password_changed_at, "
+    "link.status AS status, link.registered AS registered, "
+    "link.rotation_days AS rotation_days, link.rotation_due_at AS rotation_due_at "
+    "FROM account_service AS link JOIN accounts AS a ON a.id = link.account_id"
+)
+# Mirrors _rotation_state() in SQL so global counts and the rotation filter stay
+# bounded. Binds :rot_today (ISO date) and :rot_sdays (service default days).
+_ROTATION_STATE_SQL = """
+CASE
+  WHEN link.rotation_due_at IS NOT NULL THEN
+    CASE
+      WHEN date(link.rotation_due_at) IS NULL THEN 'unknown'
+      WHEN CAST(julianday(date(link.rotation_due_at)) - julianday(date(:rot_today)) AS INTEGER) < 0 THEN 'overdue'
+      WHEN CAST(julianday(date(link.rotation_due_at)) - julianday(date(:rot_today)) AS INTEGER) <= 7 THEN 'due_soon'
+      ELSE 'current'
+    END
+  WHEN a.password_changed_at IS NULL THEN 'unknown'
+  WHEN NOT (a.password_changed_at LIKE '%Z' OR a.password_changed_at LIKE '%+__:__' OR a.password_changed_at LIKE '%-__:__') THEN 'unknown'
+  WHEN date(a.password_changed_at) IS NULL THEN 'unknown'
+  WHEN COALESCE(link.rotation_days, :rot_sdays) IS NULL THEN 'no_policy'
+  ELSE
+    CASE
+      WHEN CAST(julianday(date(a.password_changed_at, '+' || COALESCE(link.rotation_days, :rot_sdays) || ' days')) - julianday(date(:rot_today)) AS INTEGER) < 0 THEN 'overdue'
+      WHEN CAST(julianday(date(a.password_changed_at, '+' || COALESCE(link.rotation_days, :rot_sdays) || ' days')) - julianday(date(:rot_today)) AS INTEGER) <= 7 THEN 'due_soon'
+      ELSE 'current'
+    END
+END
+"""
+
+
+def _like_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _cursor_serializer(salt: str) -> URLSafeSerializer:
+    return URLSafeSerializer(current_app.config["SECRET_KEY"], salt=salt)
+
+
+def _encode_cursor(salt: str, payload: dict[str, object]) -> str:
+    return _cursor_serializer(salt).dumps(payload)
+
+
+def _decode_cursor(salt: str, token: str) -> dict[str, object]:
+    try:
+        payload = _cursor_serializer(salt).loads(token)
+    except BadSignature:
+        abort(400)
+    if not isinstance(payload, dict):
+        abort(400)
+    return payload
+
+
+def _account_filter_sql(*, service_id, q, status, registered, rot_state, service_days, today) -> tuple[str, dict[str, object]]:
+    """Build the shared account WHERE for both the page and the aggregate queries."""
+    clauses = ["link.service_id = :sid"]
+    params: dict[str, object] = {"sid": service_id}
+    if q:
+        clauses.append("a.email LIKE :q ESCAPE '\\'")
+        params["q"] = f"%{_like_escape(q)}%"
+    if status:
+        clauses.append("link.status = :st")
+        params["st"] = status
+    if registered in ("0", "1"):
+        clauses.append("link.registered = :reg")
+        params["reg"] = int(registered)
+    if rot_state:
+        clauses.append(f"({_ROTATION_STATE_SQL}) = :rot")
+        params["rot"] = rot_state
+        params["rot_today"] = today.isoformat()
+        params["rot_sdays"] = service_days
+    return " AND ".join(clauses), params
+
+
+def _account_order_sql(sort: str, sql_dir: str) -> str:
+    if sort == "status":
+        return f"{_STATUS_RANK_SQL} {sql_dir}, a.email COLLATE NOCASE {sql_dir}, a.id {sql_dir}"
+    return f"a.email COLLATE NOCASE {sql_dir}, a.id {sql_dir}"
+
+
+def _account_keyset_sql(sort: str, op: str) -> str:
+    if sort == "status":
+        rank = _STATUS_RANK_SQL
+        return (
+            f"({rank} {op} :cur_rank "
+            f"OR ({rank} = :cur_rank AND a.email COLLATE NOCASE {op} :cur_e) "
+            f"OR ({rank} = :cur_rank AND a.email COLLATE NOCASE = :cur_e AND a.id {op} :cur_id))"
+        )
+    return (
+        f"(a.email COLLATE NOCASE {op} :cur_e "
+        f"OR (a.email COLLATE NOCASE = :cur_e AND a.id {op} :cur_id))"
+    )
 
 
 def normalize_status(value: str | None) -> str | None:
@@ -434,7 +530,7 @@ def audit_csv() -> ResponseReturnValue:
     require_recent_reauth()
     conn = get_db()
     where, params, _ = _audit_query_filters()
-    rows = conn.execute(
+    cursor = conn.execute(
         f"""
         SELECT e.id, e.occurred_at, u.username, e.action, e.target_type, e.target_id, e.metadata_json, e.source_ip, e.previous_hash, e.event_hash
         FROM audit_events AS e
@@ -444,22 +540,35 @@ def audit_csv() -> ResponseReturnValue:
         LIMIT 10000
         """,
         params,
-    ).fetchall()
-    stream = io.StringIO()
-    writer = csv.writer(stream)
-    writer.writerow(("id", "occurred_at", "usuario", "action", "target_type", "target_id", "metadata_json", "source_ip", "previous_hash", "event_hash"))
-    for row in rows:
-        values = list(row)
-        # Hash BLOBs must export as 64 lowercase hex chars, never Python bytes repr.
-        values[8] = row["previous_hash"].hex() if row["previous_hash"] is not None else ""
-        values[9] = row["event_hash"].hex() if row["event_hash"] is not None else ""
-        writer.writerow(tuple(_sanitize_cell("" if value is None else str(value)) for value in values))
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return Response(
-        stream.getvalue().encode("utf-8-sig"),
-        mimetype="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=auditoria_{stamp}.csv"},
     )
+    filename = f"auditoria_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.csv"
+    spool = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+    try:
+        buffer = io.StringIO(newline="")
+        writer = csv.writer(buffer)
+
+        def _flush() -> None:
+            spool.write(buffer.getvalue().encode("utf-8"))
+            buffer.seek(0)
+            buffer.truncate(0)
+
+        spool.write("\ufeff".encode("utf-8"))
+        writer.writerow(("id", "occurred_at", "usuario", "action", "target_type", "target_id", "metadata_json", "source_ip", "previous_hash", "event_hash"))
+        _flush()
+        for row in cursor:
+            values = list(row)
+            # Hash BLOBs must export as 64 lowercase hex chars, never Python bytes repr.
+            values[8] = row["previous_hash"].hex() if row["previous_hash"] is not None else ""
+            values[9] = row["event_hash"].hex() if row["event_hash"] is not None else ""
+            writer.writerow(tuple(_sanitize_cell("" if value is None else str(value)) for value in values))
+            _flush()
+        spool.seek(0)
+        response = send_file(spool, mimetype="text/csv", as_attachment=True, download_name=filename)
+        response.call_on_close(spool.close)
+        return response
+    except Exception:
+        spool.close()
+        raise
 
 
 
@@ -469,44 +578,140 @@ def coverage() -> ResponseReturnValue:
     user = g.current_user
     services = accessible_services(conn, user)
     no_access = user["role"] != "admin" and not services
+    filter_mode = request.args.get("filter") or ""
+    if filter_mode not in ("none-registered", "multi-active", "missing-registration"):
+        filter_mode = ""
+    accessible_ids = [s["id"] for s in services]
+    accessible_set = set(accessible_ids)
+    # Selected services matter only for missing-registration and are constrained
+    # to accessible services so inaccessible IDs never widen the scan or reveal
+    # that a service exists.
+    selected_services = sorted(
+        value
+        for value in {int(raw) for raw in request.args.getlist("services") if _ASCII_SERVICE_ID.fullmatch(raw)}
+        if value in accessible_set
+    )
+    # Selected services are meaningful only for missing-registration; drop them
+    # elsewhere so they never leak into query state or pagination links.
+    if filter_mode != "missing-registration":
+        selected_services = []
+    accounts: list[Any] = []
+    aggregates: dict[int, dict[str, int]] = {}
+    links_by_account: dict[tuple[int, int], dict[str, object]] = {}
+    total_count = 0
+    page_count = 0
+    has_prev = has_next = False
+    prev_cursor: str | None = None
+    next_cursor: str | None = None
+    view_params: dict[str, object] = {}
+    if filter_mode:
+        view_params["filter"] = filter_mode
+    if selected_services:
+        view_params["services"] = selected_services
+
     if services:
-        service_ids = [s["id"] for s in services]
-        placeholders = ",".join("?" for _ in service_ids)
-        if user["role"] == "admin":
-            accounts = conn.execute("SELECT id, email FROM accounts ORDER BY email COLLATE NOCASE").fetchall()
+        svc_ph = ",".join("?" for _ in accessible_ids)
+        # Admins see every account (including unlinked ones); members see only
+        # accounts linked to a service they can access.
+        join = "LEFT JOIN" if user["role"] == "admin" else "JOIN"
+        base_from = (
+            f"FROM accounts AS a {join} account_service AS link "
+            f"ON link.account_id = a.id AND link.service_id IN ({svc_ph})"
+        )
+        having = ""
+        having_params: list[object] = []
+        if filter_mode == "none-registered":
+            having = "HAVING registered_count = 0"
+        elif filter_mode == "multi-active":
+            having = "HAVING active_count > 1"
+        elif filter_mode == "missing-registration" and selected_services:
+            sel_ph = ",".join("?" for _ in selected_services)
+            having = (
+                "HAVING COALESCE(SUM(CASE WHEN link.service_id IN "
+                f"({sel_ph}) THEN link.registered ELSE 0 END), 0) < ?"
+            )
+            having_params = [*selected_services, len(selected_services)]
+        agg_cols = (
+            "COALESCE(SUM(link.registered), 0) AS registered_count, "
+            "COALESCE(SUM(CASE WHEN link.status = 'ativo' THEN 1 ELSE 0 END), 0) AS active_count"
+        )
+        total_count = conn.execute(
+            f"SELECT COUNT(*) AS n FROM (SELECT a.id, {agg_cols} {base_from} GROUP BY a.id {having})",
+            (*accessible_ids, *having_params),
+        ).fetchone()["n"]
+
+        limit = _COVERAGE_PAGE_SIZE + 1
+        keyset = ""
+        key_params: list[object] = []
+        nav = "next"
+        order_dir = "ASC"
+        cursor_token = request.args.get("cursor")
+        if cursor_token:
+            cur = _decode_cursor("coverage-cursor", cursor_token)
+            if not isinstance(cur.get("e"), str) or not isinstance(cur.get("id"), int) or cur.get("nav") not in ("next", "prev"):
+                abort(400)
+            # The cursor is bound to the filter/services it was issued under, so a
+            # tampered cursor replayed under a different filter is rejected rather
+            # than paginating from the wrong anchor.
+            if cur.get("f") != filter_mode or cur.get("sv") != selected_services:
+                abort(400)
+            nav = cur["nav"]
+            comparator = ">" if nav == "next" else "<"
+            order_dir = "ASC" if nav == "next" else "DESC"
+            keyset = (
+                f"AND (a.email COLLATE NOCASE {comparator} ? "
+                f"OR (a.email COLLATE NOCASE = ? AND a.id {comparator} ?))"
+            )
+            key_params = [cur["e"], cur["e"], cur["id"]]
+        rows_sql = (
+            f"SELECT a.id AS id, a.email AS email, {agg_cols} {base_from} "
+            f"WHERE 1=1 {keyset} GROUP BY a.id, a.email {having} "
+            f"ORDER BY a.email COLLATE NOCASE {order_dir}, a.id {order_dir} LIMIT ?"
+        )
+        fetched = conn.execute(rows_sql, (*accessible_ids, *key_params, *having_params, limit)).fetchall()
+        has_more = len(fetched) > _COVERAGE_PAGE_SIZE
+        page = fetched[:_COVERAGE_PAGE_SIZE]
+        if nav == "prev":
+            page = list(reversed(page))
+            has_prev = has_more
+            has_next = True
         else:
-            accounts = conn.execute(
-                f"""
-                SELECT DISTINCT a.id, a.email
-                FROM accounts AS a
-                JOIN account_service AS link ON link.account_id = a.id
-                WHERE link.service_id IN ({placeholders})
-                ORDER BY a.email COLLATE NOCASE
-                """,
-                service_ids,
-            ).fetchall()
-        links = conn.execute(
-            f"SELECT account_id, service_id, status, registered FROM account_service WHERE service_id IN ({placeholders})",
-            service_ids,
-        ).fetchall()
-    else:
-        accounts = []
-        links = []
-    existing = {(row["account_id"], row["service_id"]): {"status": row["status"], "registered": bool(row["registered"])} for row in links}
-    # Emit a cell for every visible account x visible service pair, even absent links.
-    cells = {}
-    for account in accounts:
-        for service in services:
-            key = (account["id"], service["id"])
-            cells[key] = existing.get(key, {"status": "nunca", "registered": False})
-    aggregates = {}
-    for account in accounts:
-        account_cells = [cells.get((account["id"], service["id"])) for service in services]
-        aggregates[account["id"]] = {
-            "registered_count": sum(1 for cell in account_cells if cell and cell["registered"]),
-            "active_count": sum(1 for cell in account_cells if cell and cell["status"] == "ativo"),
+            has_next = has_more
+            has_prev = bool(cursor_token)
+        accounts = page
+        page_count = len(page)
+        aggregates = {
+            row["id"]: {"registered_count": row["registered_count"], "active_count": row["active_count"]}
+            for row in page
         }
-    return Response(render_template("coverage.html", services=services, accounts=accounts, cells=cells, aggregates=aggregates, labels=STATUS_LABELS, no_access=no_access), headers={"Cache-Control": "no-store, private"})
+        if page:
+            if has_prev:
+                prev_cursor = _encode_cursor("coverage-cursor", {"e": page[0]["email"], "id": page[0]["id"], "nav": "prev", "f": filter_mode, "sv": selected_services})
+            if has_next:
+                next_cursor = _encode_cursor("coverage-cursor", {"e": page[-1]["email"], "id": page[-1]["id"], "nav": "next", "f": filter_mode, "sv": selected_services})
+            page_ids = [row["id"] for row in page]
+            id_ph = ",".join("?" for _ in page_ids)
+            # Only queried links are materialized; absent pairs stay out of the map
+            # and the template renders the default cell for a missing lookup.
+            for lr in conn.execute(
+                f"SELECT account_id, service_id, status, registered FROM account_service "
+                f"WHERE account_id IN ({id_ph}) AND service_id IN ({svc_ph})",
+                (*page_ids, *accessible_ids),
+            ):
+                links_by_account[(lr["account_id"], lr["service_id"])] = {
+                    "status": lr["status"],
+                    "registered": bool(lr["registered"]),
+                }
+    return Response(
+        render_template(
+            "coverage.html", services=services, accounts=accounts, aggregates=aggregates,
+            links_by_account=links_by_account, labels=STATUS_LABELS, no_access=no_access,
+            filter_mode=filter_mode, selected_services=selected_services, total_count=total_count,
+            page_count=page_count, has_prev=has_prev, has_next=has_next,
+            prev_cursor=prev_cursor, next_cursor=next_cursor, view_params=view_params,
+        ),
+        headers={"Cache-Control": "no-store, private"},
+    )
 
 
 def encrypted_account_password(account_id: int, password: str) -> tuple[bytes, bytes, int]:
@@ -517,6 +722,23 @@ def encrypted_account_password(account_id: int, password: str) -> tuple[bytes, b
 def encrypted_field_value(account_id: int, field_id: int, value: str) -> tuple[bytes, bytes, int]:
     encrypted = encrypt_secret(value, aad=account_field_aad(account_id, field_id))
     return encrypted.ciphertext, encrypted.nonce, encrypted.key_version
+
+
+def _resolve_import_field_ids(conn, service_id: int, field_names: tuple[str, ...]) -> list[int]:
+    existing = {
+        row["name"]: row["id"]
+        for row in conn.execute("SELECT id, name FROM custom_fields WHERE service_id=?", (service_id,))
+    }
+    field_ids: list[int] = []
+    for name in field_names:
+        field_id = existing.get(name)
+        if field_id is None:
+            field_id = inserted_id(conn.execute(
+                "INSERT INTO custom_fields (service_id, name) VALUES (?, ?)", (service_id, name)
+            ))
+            existing[name] = field_id
+        field_ids.append(field_id)
+    return field_ids
 
 
 def _related_account(conn, service_id: int | None, account_id: int) -> None:
@@ -628,67 +850,123 @@ def index() -> str:
         "delete": can_delete,
     }
     rot_enabled = rotation_enabled(conn)
+    today = datetime.now(UTC).date()
+    rot_filter = request.args.get("rot") or ""
+    if not rot_enabled or rot_filter not in ("due_soon", "overdue", "unknown", "current", "no_policy"):
+        rot_filter = ""
+    sort = request.args.get("sort")
+    if sort not in ("email", "status"):
+        sort = "status"
+    direction = request.args.get("dir")
+    if direction not in ("asc", "desc"):
+        direction = "asc"
+    ascending = direction == "asc"
+    q = (request.args.get("q") or "").strip()
+    st_filter = request.args.get("st") or ""
+    if st_filter not in STATUS_ORDER:
+        st_filter = ""
+    reg_filter = request.args.get("reg") or ""
+    if reg_filter not in ("0", "1"):
+        reg_filter = ""
+    filters_active = bool(q or st_filter or reg_filter or rot_filter)
+
     rows: list[dict[str, object]] = []
     fields: list[Any] = []
     counts = {status: 0 for status in STATUS_ORDER}
     rotation_counts = {"due_soon": 0, "overdue": 0}
-    rot_filter = request.args.get("rot") or ""
-    if not rot_enabled or rot_filter not in ("", "due_soon", "overdue", "unknown", "current", "no_policy"):
-        rot_filter = ""
     service_days = None
-    today = datetime.now(UTC).date()
+    page_count = 0
+    prev_cursor: str | None = None
+    next_cursor: str | None = None
+    has_prev = False
+    has_next = False
 
     if service_id is not None:
         if rot_enabled:
             service_days_row = conn.execute("SELECT rotation_days FROM services WHERE id=?", (service_id,)).fetchone()
             service_days = service_days_row["rotation_days"] if service_days_row is not None else None
-        account_rows = conn.execute(
-            """
-            SELECT a.id, a.email, a.password_changed_at, link.status, link.registered, link.rotation_days, link.rotation_due_at
-            FROM account_service AS link
-            JOIN accounts AS a ON a.id = link.account_id
-            WHERE link.service_id = ?
-            """,
-            (service_id,),
-        ).fetchall()
         fields = conn.execute("SELECT id, name FROM custom_fields WHERE service_id = ? ORDER BY name", (service_id,)).fetchall()
-        field_names: defaultdict[int, list[dict[str, object]]] = defaultdict(list)
-        for row in conn.execute(
-            """
-            SELECT value.account_id, value.field_id, field.name,
-                   value.value_ciphertext, value.value_nonce, value.value_key_version
-            FROM field_values AS value
-            JOIN custom_fields AS field ON field.id = value.field_id
-            WHERE field.service_id = ?
-            ORDER BY field.name
-            """,
-            (service_id,),
-        ):
-            value = decrypt_secret(
-                EncryptedValue(row["value_ciphertext"], row["value_nonce"], row["value_key_version"]),
-                aad=account_field_aad(row["account_id"], row["field_id"]),
-            )
-            field_names[row["account_id"]].append(
-                {
-                    "field_id": row["field_id"],
-                    "name": row["name"],
-                    "value": value,
-                }
-            )
-        for row in sorted(account_rows, key=lambda account: (STATUS_ORDER.get(account["status"], 1), account["email"].lower())):
-            counts[row["status"]] += 1
-            entry = {
+
+        filter_sql, base_params = _account_filter_sql(
+            service_id=service_id, q=q, status=st_filter, registered=reg_filter,
+            rot_state=rot_filter, service_days=service_days, today=today,
+        )
+        cursor_token = request.args.get("cursor")
+        focus_raw = request.args.get("focus")
+        limit = _ACCOUNT_PAGE_SIZE + 1
+
+        if cursor_token:
+            cur = _decode_cursor("account-cursor", cursor_token)
+            if cur.get("s") != sort or cur.get("d") != direction or cur.get("nav") not in ("next", "prev"):
+                abort(400)
+            if not isinstance(cur.get("e"), str) or not isinstance(cur.get("id"), int):
+                abort(400)
+            st = cur.get("st")
+            if sort == "status" and (not isinstance(st, str) or st not in STATUS_ORDER):
+                abort(400)
+            nav = cur["nav"]
+            use_gt = (nav == "next") == ascending
+            op = ">" if use_gt else "<"
+            sql_dir = "ASC" if use_gt else "DESC"
+            params = dict(base_params)
+            params["cur_e"] = cur["e"]
+            params["cur_id"] = cur["id"]
+            if sort == "status":
+                params["cur_rank"] = STATUS_ORDER[st]
+            params["limit"] = limit
+            sql = f"{_ACCOUNT_SELECT} WHERE {filter_sql} AND {_account_keyset_sql(sort, op)} ORDER BY {_account_order_sql(sort, sql_dir)} LIMIT :limit"
+            fetched = conn.execute(sql, params).fetchall()
+            has_more = len(fetched) > _ACCOUNT_PAGE_SIZE
+            page = fetched[:_ACCOUNT_PAGE_SIZE]
+            if nav == "prev":
+                page = list(reversed(page))
+                has_prev = has_more
+                has_next = True
+            else:
+                has_next = has_more
+                has_prev = True
+        else:
+            focus_id = int(focus_raw) if focus_raw and focus_raw.isdigit() and int(focus_raw) > 0 else None
+            page_start = 0
+            if focus_id is not None:
+                anchor = conn.execute(
+                    "SELECT a.email AS email, link.status AS status FROM account_service AS link "
+                    "JOIN accounts AS a ON a.id = link.account_id WHERE link.service_id = :sid AND a.id = :fid",
+                    {"sid": service_id, "fid": focus_id},
+                ).fetchone()
+                if anchor is None:
+                    focus_id = None
+                else:
+                    before_op = "<" if ascending else ">"
+                    cparams = dict(base_params)
+                    cparams["cur_e"] = anchor["email"]
+                    cparams["cur_id"] = focus_id
+                    if sort == "status":
+                        cparams["cur_rank"] = STATUS_ORDER.get(anchor["status"], 1)
+                    before = conn.execute(
+                        f"SELECT COUNT(*) AS n FROM account_service AS link JOIN accounts AS a ON a.id = link.account_id "
+                        f"WHERE {filter_sql} AND {_account_keyset_sql(sort, before_op)}",
+                        cparams,
+                    ).fetchone()["n"]
+                    page_start = (before // _ACCOUNT_PAGE_SIZE) * _ACCOUNT_PAGE_SIZE
+            params = dict(base_params)
+            params["limit"] = limit
+            params["offset"] = page_start
+            sql = f"{_ACCOUNT_SELECT} WHERE {filter_sql} ORDER BY {_account_order_sql(sort, 'ASC' if ascending else 'DESC')} LIMIT :limit OFFSET :offset"
+            fetched = conn.execute(sql, params).fetchall()
+            has_next = len(fetched) > _ACCOUNT_PAGE_SIZE
+            page = fetched[:_ACCOUNT_PAGE_SIZE]
+            has_prev = page_start > 0
+
+        for row in page:
+            entry: dict[str, object] = {
                 "id": row["id"],
                 "email": row["email"],
                 "status": row["status"],
                 "registered": bool(row["registered"]),
-                "fields": field_names[row["id"]],
             }
             if rot_enabled:
                 rotation = _rotation_state(row["password_changed_at"], row["rotation_days"], row["rotation_due_at"], service_days, today=today)
-                rotation_state = str(rotation["state"])
-                if rotation_state in rotation_counts:
-                    rotation_counts[rotation_state] += 1
                 entry.update({
                     "rotation_state": rotation["state"],
                     "rotation_due_at": rotation["due_at"],
@@ -698,7 +976,32 @@ def index() -> str:
                     "rotation_due_at_link": row["rotation_due_at"],
                 })
             rows.append(entry)
-    counts["total"] = len(rows)
+        page_count = len(rows)
+
+        def _mk_cursor(row: Any, nav: str) -> str:
+            payload: dict[str, object] = {"s": sort, "d": direction, "nav": nav, "e": row["email"], "id": row["id"]}
+            if sort == "status":
+                payload["st"] = row["status"]
+            return _encode_cursor("account-cursor", payload)
+
+        if page:
+            if has_prev:
+                prev_cursor = _mk_cursor(page[0], "prev")
+            if has_next:
+                next_cursor = _mk_cursor(page[-1], "next")
+
+        for crow in conn.execute("SELECT link.status AS s, COUNT(*) AS n FROM account_service AS link WHERE link.service_id = ? GROUP BY link.status", (service_id,)):
+            if crow["s"] in counts:
+                counts[crow["s"]] = crow["n"]
+        if rot_enabled:
+            for rrow in conn.execute(
+                f"SELECT ({_ROTATION_STATE_SQL}) AS s, COUNT(*) AS n FROM account_service AS link "
+                f"JOIN accounts AS a ON a.id = link.account_id WHERE link.service_id = :sid GROUP BY s",
+                {"sid": service_id, "rot_today": today.isoformat(), "rot_sdays": service_days},
+            ):
+                if rrow["s"] in rotation_counts:
+                    rotation_counts[rrow["s"]] = rrow["n"]
+    counts["total"] = sum(counts[status] for status in STATUS_ORDER)
     current_name = next((service["name"] for service in services if service["id"] == service_id), None)
     feedback = None
     error_kind = request.args.get("error")
@@ -720,7 +1023,61 @@ def index() -> str:
     elif (ok := request.args.get("ok")) in OK_MESSAGES:
         feedback = OK_MESSAGES[ok]
     effective_initial_service_id = initial_service_id or (services[0]["id"] if services else None)
-    return render_template("index.html", rows=rows, labels=STATUS_LABELS, counts=counts, services=services, current=service_id, current_name=current_name, initial_service_id=effective_initial_service_id, service_fields=fields, feedback=feedback, feedback_is_error=feedback_is_error, service_role=service_role, capabilities=capabilities, no_access=no_access, rotation_counts=rotation_counts, rot_filter=rot_filter, rotation_labels=ROTATION_LABELS, service_rotation_days=(service_days if service_id is not None else None), rotation_enabled=rot_enabled)
+    view_params: dict[str, object] = {"sort": sort, "dir": direction}
+    if q:
+        view_params["q"] = q
+    if st_filter:
+        view_params["st"] = st_filter
+    if reg_filter:
+        view_params["reg"] = reg_filter
+    if rot_filter:
+        view_params["rot"] = rot_filter
+    return render_template(
+        "index.html", rows=rows, labels=STATUS_LABELS, counts=counts, services=services, current=service_id,
+        current_name=current_name, initial_service_id=effective_initial_service_id, service_fields=fields,
+        feedback=feedback, feedback_is_error=feedback_is_error, service_role=service_role, capabilities=capabilities,
+        no_access=no_access, rotation_counts=rotation_counts, rot_filter=rot_filter, rotation_labels=ROTATION_LABELS,
+        service_rotation_days=(service_days if service_id is not None else None), rotation_enabled=rot_enabled,
+        q=q, st_filter=st_filter, reg_filter=reg_filter, sort=sort, direction=direction, filters_active=filters_active,
+        page_count=page_count, has_prev=has_prev, has_next=has_next, prev_cursor=prev_cursor, next_cursor=next_cursor,
+        view_params=view_params,
+    )
+
+
+@routes.get("/accounts/<int:account_id>/details")
+def account_details(account_id: int) -> ResponseReturnValue:
+    conn = get_db()
+    service_id = required_query_service_id()
+    require_account_role(conn, account_id, service_id, "viewer")
+    user = g.current_user
+    service_role = get_user_service_role(conn, user, service_id)
+    can_edit = service_role in ("admin", "editor", "service_admin")
+    can_delete = service_role in ("admin", "service_admin")
+    fields: list[dict[str, object]] = []
+    for row in conn.execute(
+        """
+        SELECT value.field_id AS field_id, field.name AS name,
+               value.value_ciphertext AS ct, value.value_nonce AS nonce, value.value_key_version AS kv
+        FROM field_values AS value
+        JOIN custom_fields AS field ON field.id = value.field_id
+        WHERE field.service_id = ? AND value.account_id = ?
+        ORDER BY field.name
+        """,
+        (service_id, account_id),
+    ):
+        value = decrypt_secret(
+            EncryptedValue(row["ct"], row["nonce"], row["kv"]),
+            aad=account_field_aad(account_id, row["field_id"]),
+        )
+        fields.append({"field_id": row["field_id"], "name": row["name"], "value": value})
+    return Response(
+        render_template(
+            "_account_details.html",
+            account_id=account_id, current=service_id, fields=fields,
+            capabilities={"edit": can_edit, "delete": can_delete},
+        ),
+        headers={"Cache-Control": "no-store, private"},
+    )
 
 
 @routes.post("/add")
@@ -878,24 +1235,32 @@ def import_bulk() -> ResponseReturnValue:
     except ImportFormatError as error:
         return redirect(url_for("routes.index", service=service_id, error=error.kind))
 
-    normalized_records: list[tuple[str, str, str]] = []
-    for email, password, status in records:
-        normalized_email = _valid_email(email)
-        normalized_status = normalize_status(status)
-        if normalized_email is None or normalized_status is None or _valid_secret(password) is None:
+    normalized_records: list[tuple[str, str, str, tuple[str, ...]]] = []
+    for record in records.records:
+        normalized_email = _valid_email(record.email)
+        normalized_status = normalize_status(record.status)
+        if normalized_email is None or normalized_status is None or _valid_secret(record.password) is None:
             return redirect(url_for("routes.index", service=service_id, error="validation"))
-        normalized_records.append((normalized_email, password, normalized_status))
+        if any(_valid_secret(value) is None for value in record.field_values):
+            return redirect(url_for("routes.index", service=service_id, error="validation"))
+        normalized_records.append((normalized_email, record.password, normalized_status, record.field_values))
+    field_names = records.field_names
+    if any(_valid_name(name) is None for name in field_names):
+        return redirect(url_for("routes.index", service=service_id, error="validation"))
 
     added = skipped = 0
     try:
         with transaction(conn):
             changed_at = now_text()
             emails = {row["email"].casefold() for row in conn.execute("SELECT email FROM accounts")}
-            for email, password, status in normalized_records:
+            field_ids: list[int] | None = None
+            for email, password, status, field_values in normalized_records:
                 if email.casefold() in emails:
                     skipped += 1
                     continue
                 emails.add(email.casefold())
+                if field_ids is None:
+                    field_ids = _resolve_import_field_ids(conn, service_id, field_names)
                 account_id = inserted_id(conn.execute(
                     "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version, password_changed_at) VALUES (?, ?, ?, ?, ?)",
                     (email, b"", b"0" * 12, 1, changed_at),
@@ -905,6 +1270,11 @@ def import_bulk() -> ResponseReturnValue:
                     (*encrypted_account_password(account_id, password), account_id),
                 )
                 link_all_services(conn, account_id, service_id, status)
+                for field_id, value in zip(field_ids, field_values, strict=True):
+                    conn.execute(
+                        "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?)",
+                        (field_id, account_id, *encrypted_field_value(account_id, field_id, value)),
+                    )
                 added += 1
             _audit(conn, action="accounts.imported", target_type="service", target_id=service_id, metadata={"added": added, "skipped": skipped})
     except Exception:
@@ -1098,8 +1468,7 @@ def bulk_status() -> ResponseReturnValue:
     status = normalize_status(request.form.get("status"))
     if status is None:
         return _form_error("Status inválido")
-    for account_id in account_ids:
-        require_account_role(conn, account_id, service_id, "editor")
+    require_accounts_role(conn, account_ids, service_id, "editor")
     placeholders = ",".join("?" for _ in account_ids)
     with transaction(conn):
         conn.execute(
@@ -1121,8 +1490,7 @@ def bulk_registered() -> ResponseReturnValue:
     if raw not in {"0", "1"}:
         return _form_error("Cadastro inválido")
     registered = int(raw)
-    for account_id in account_ids:
-        require_account_role(conn, account_id, service_id, "editor")
+    require_accounts_role(conn, account_ids, service_id, "editor")
     placeholders = ",".join("?" for _ in account_ids)
     with transaction(conn):
         conn.execute(
@@ -1149,8 +1517,7 @@ def bulk_field() -> ResponseReturnValue:
         return _form_error("Campo inválido")
     if conn.execute("SELECT 1 FROM custom_fields WHERE id=? AND service_id=?", (field_id, service_id)).fetchone() is None:
         abort(404)
-    for account_id in account_ids:
-        require_account_role(conn, account_id, service_id, "editor")
+    require_accounts_role(conn, account_ids, service_id, "editor")
     with transaction(conn):
         for account_id in account_ids:
             encrypted = encrypted_field_value(account_id, field_id, value)
@@ -1172,8 +1539,7 @@ def bulk_field_add() -> ResponseReturnValue:
     name = _valid_name(request.form.get("field_name"))
     if name is None:
         return _form_error("Campo inválido")
-    for account_id in account_ids:
-        require_account_role(conn, account_id, service_id, "editor")
+    require_accounts_role(conn, account_ids, service_id, "editor")
     placeholders = ",".join("?" for _ in account_ids)
     with transaction(conn):
         field = conn.execute("SELECT id FROM custom_fields WHERE service_id=? AND name=?", (service_id, name)).fetchone()
@@ -1208,8 +1574,7 @@ def bulk_delete() -> ResponseReturnValue:
         return account_ids
     if request.form.get("confirmation_count", "") != str(len(account_ids)):
         return _form_error("Confirmação inválida")
-    for account_id in account_ids:
-        require_account_role(conn, account_id, service_id, "service_admin", all_linked_services=True)
+    require_accounts_role(conn, account_ids, service_id, "service_admin", all_linked_services=True)
     placeholders = ",".join("?" for _ in account_ids)
     with transaction(conn):
         conn.execute(f"DELETE FROM accounts WHERE id IN ({placeholders})", account_ids)
@@ -1432,7 +1797,7 @@ def security_integrations() -> ResponseReturnValue:
             "security_integrations.html",
             configs=configs,
             event_types=webhook_event_types(),
-            at_capacity=count_active_configs(conn) >= 20,
+            at_capacity=len(configs) >= 20,
         ),
         headers={"Cache-Control": "no-store, private"},
     )

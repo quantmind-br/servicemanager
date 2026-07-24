@@ -312,40 +312,59 @@ def list_webhook_configs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         ORDER BY id
         """
     ).fetchall()
-    configs: list[dict[str, Any]] = []
-    for row in rows:
-        cid = row["id"]
-        subs = [
-            r["event_type"]
-            for r in conn.execute(
-                "SELECT event_type FROM webhook_subscriptions WHERE config_id = ? ORDER BY event_type",
-                (cid,),
-            ).fetchall()
-        ]
-        recent = conn.execute(
-            """
-            SELECT id, event_type, status, attempt_count, last_status_code, last_error,
-                   created_at, delivered_at
+    if not rows:
+        return []
+    ids = [row["id"] for row in rows]
+    placeholders = ",".join("?" for _ in ids)
+    subs_by_config: dict[int, list[str]] = {}
+    for sub in conn.execute(
+        f"""
+        SELECT config_id, event_type
+        FROM webhook_subscriptions
+        WHERE config_id IN ({placeholders})
+        ORDER BY config_id, event_type
+        """,
+        ids,
+    ).fetchall():
+        subs_by_config.setdefault(sub["config_id"], []).append(sub["event_type"])
+    deliveries_by_config: dict[int, list[dict[str, Any]]] = {}
+    for delivery in conn.execute(
+        f"""
+        WITH ranked AS (
+            SELECT id, config_id, event_type, status, attempt_count,
+                   last_status_code, last_error, created_at, delivered_at,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY config_id
+                       ORDER BY id DESC
+                   ) AS delivery_rank
             FROM webhook_deliveries
-            WHERE config_id = ?
-            ORDER BY id DESC
-            LIMIT 10
-            """,
-            (cid,),
-        ).fetchall()
-        configs.append(
-            {
-                "id": cid,
-                "destination_host": row["destination_host"],
-                "description": row["description"],
-                "enabled": bool(row["enabled"]),
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
-                "subscriptions": subs,
-                "recent_deliveries": [_public_delivery(r) for r in recent],
-            }
+            WHERE config_id IN ({placeholders})
         )
-    return configs
+        SELECT id, config_id, event_type, status, attempt_count,
+               last_status_code, last_error, created_at, delivered_at
+        FROM ranked
+        WHERE delivery_rank <= 10
+        ORDER BY config_id, id DESC
+        """,
+        ids,
+    ).fetchall():
+        cid = delivery["config_id"]
+        public = _public_delivery(delivery)
+        del public["config_id"]
+        deliveries_by_config.setdefault(cid, []).append(public)
+    return [
+        {
+            "id": row["id"],
+            "destination_host": row["destination_host"],
+            "description": row["description"],
+            "enabled": bool(row["enabled"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "subscriptions": subs_by_config.get(row["id"], []),
+            "recent_deliveries": deliveries_by_config.get(row["id"], []),
+        }
+        for row in rows
+    ]
 
 
 def count_active_configs(conn: sqlite3.Connection) -> int:

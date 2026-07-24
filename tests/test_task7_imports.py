@@ -16,7 +16,7 @@ from openpyxl import Workbook
 
 from app import create_app
 from service_manager.audit import verify_audit_chain
-from service_manager.crypto import EncryptedValue, account_password_aad, decrypt_secret, hash_password
+from service_manager.crypto import EncryptedValue, account_field_aad, account_password_aad, decrypt_secret, hash_password
 from service_manager.db import get_db, inserted_id
 from service_manager.imports import MAX_XLSX_UNCOMPRESSED_BYTES, parse_import_file
 
@@ -103,6 +103,25 @@ def test_parser_enforces_record_column_cell_and_cell_count_limits():
     over_limit = b"email,password,status\n" + b"".join(f"user{number}@x.test,p,ativo\n".encode() for number in range(5001))
     with pytest.raises(ValueError, match="records"):
         parse_import_file("accounts.csv", io.BytesIO(over_limit))
+
+
+def test_parser_preserves_additional_field_columns_and_rejects_invalid_headers():
+    parsed = parse_import_file(
+        "accounts.csv",
+        b"email,password,status,campo:API Key,campo:email,cadastrada\n"
+        b"user@x.test,secret,ativo,abc123,alias@x.test,2024-01-01\n"
+        b"short@x.test,secret,ativo\n",
+    )
+    assert parsed.field_names == ("API Key", "email")
+    assert parsed.records[0].email == "user@x.test"
+    assert parsed.records[0].field_values == ("abc123", "alias@x.test")
+    # A short row still yields exactly one value per field name, defaulting to "".
+    assert parsed.records[1].field_values == ("", "")
+
+    with pytest.raises(ValueError, match="name"):
+        parse_import_file("accounts.csv", b"email,campo:\nuser@x.test,value\n")
+    with pytest.raises(ValueError, match="duplicate"):
+        parse_import_file("accounts.csv", b"email,campo:Token,campo:Token\nuser@x.test,a,b\n")
 
 
 def test_parser_rejects_more_than_one_hundred_thousand_cells():
@@ -231,14 +250,110 @@ def test_import_validation_error_rolls_back_entire_batch(app, client):
         client,
         app,
         service_id,
-        b"email,password,status\nvalid@example.test,secret,ativo\nnot-an-email,secret,ativo\n",
+        b"email,password,status,campo:Token\nvalid@example.test,secret,ativo,tok\nnot-an-email,secret,ativo,tok2\n",
     )
 
     assert response.status_code == 302
     assert response.headers["Location"].endswith(f"/?service={service_id}&error=validation")
     with app.app_context():
-        assert get_db().execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 0
-        assert get_db().execute("SELECT COUNT(*) FROM audit_events WHERE action != 'bootstrap.initialized'").fetchone()[0] == 0
+        conn = get_db()
+        assert conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM custom_fields").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM field_values").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM audit_events WHERE action != 'bootstrap.initialized'").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("extension", ["csv", "xlsx"])
+def test_import_additional_fields_csv_and_xlsx_are_encrypted(app, client, extension: str):
+    service_id = authenticate_admin(app, client)
+    with app.app_context():
+        conn = get_db()
+        existing_token_id = inserted_id(conn.execute(
+            "INSERT INTO custom_fields (service_id, name) VALUES (?, 'Token')", (service_id,)
+        ))
+        conn.commit()
+
+    header = ("email", "password", "status", "campo:Token", "campo:Observação", "cadastrada", "ignorada")
+    row_a = ("a@example.test", "secret-a", "ativo", "tok-a", "obs-a", "2024-01-01", "noise")
+    row_b = ("b@example.test", "secret-b", "ativo", "tok-b", "", "2024-01-02", "noise")
+    if extension == "csv":
+        data = ("\n".join(",".join(cells) for cells in (header, row_a, row_b)) + "\n").encode()
+        filename = "accounts.csv"
+    else:
+        data = workbook_bytes([header, row_a, row_b])
+        filename = "accounts.xlsx"
+
+    response = csv_upload(client, app, service_id, data, filename=filename)
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(f"/?service={service_id}&added=2&skipped=0")
+
+    with app.app_context():
+        conn = get_db()
+        fields = {row["name"]: row["id"] for row in conn.execute("SELECT id, name FROM custom_fields WHERE service_id=?", (service_id,))}
+        assert fields["Token"] == existing_token_id
+        assert set(fields) == {"Token", "Observação"}
+        assert conn.execute("SELECT COUNT(*) FROM custom_fields WHERE name='Observação'").fetchone()[0] == 1
+
+        expected = {
+            ("a@example.test", "Token"): "tok-a",
+            ("a@example.test", "Observação"): "obs-a",
+            ("b@example.test", "Token"): "tok-b",
+            ("b@example.test", "Observação"): "",
+        }
+        for (email, field_name), plaintext in expected.items():
+            account_id = conn.execute("SELECT id FROM accounts WHERE email=?", (email,)).fetchone()["id"]
+            field_id = fields[field_name]
+            stored = conn.execute(
+                "SELECT value_ciphertext, value_nonce, value_key_version FROM field_values WHERE field_id=? AND account_id=?",
+                (field_id, account_id),
+            ).fetchone()
+            assert stored is not None
+            assert decrypt_secret(
+                EncryptedValue(stored["value_ciphertext"], stored["value_nonce"], stored["value_key_version"]),
+                aad=account_field_aad(account_id, field_id),
+            ) == plaintext
+
+        event = conn.execute("SELECT metadata_json FROM audit_events WHERE action='accounts.imported'").fetchone()
+        assert event["metadata_json"] == '{"added":2,"skipped":0}'
+        for leaked in ("Token", "Observação", "tok-a", "obs-a", "cadastrada", "ignorada"):
+            assert leaked not in event["metadata_json"]
+        assert verify_audit_chain()
+
+
+def test_import_duplicate_only_does_not_create_additional_fields(app, client):
+    service_id = authenticate_admin(app, client)
+    csv_upload(client, app, service_id, b"email,password,status\ndup@example.test,secret,ativo\n")
+
+    response = csv_upload(
+        client,
+        app,
+        service_id,
+        b"email,password,status,campo:Novo\ndup@example.test,other,ativo,value\n",
+    )
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(f"/?service={service_id}&added=0&skipped=1")
+    with app.app_context():
+        conn = get_db()
+        assert conn.execute("SELECT COUNT(*) FROM custom_fields").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM field_values").fetchone()[0] == 0
+
+
+def test_import_oversized_custom_field_name_does_not_mutate(app, client):
+    service_id = authenticate_admin(app, client)
+    oversized = "x" * 101
+    response = csv_upload(
+        client,
+        app,
+        service_id,
+        f"email,password,status,campo:{oversized}\nuser@example.test,secret,ativo,value\n".encode(),
+    )
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(f"/?service={service_id}&error=validation")
+    with app.app_context():
+        conn = get_db()
+        assert conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM custom_fields").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM field_values").fetchone()[0] == 0
 
 
 def test_malformed_csv_quote_is_rejected_without_mutation(app, client):

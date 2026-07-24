@@ -19,6 +19,7 @@ __all__ = [
     "replace_service_preferences",
     "require_service_role",
     "require_account_role",
+    "require_accounts_role",
 ]
 
 SERVICE_ROLE_RANK = {"viewer": 1, "editor": 2, "service_admin": 3}
@@ -185,4 +186,101 @@ def require_account_role(
                     required_role=minimum_role,
                 )
             abort(403)
+    return minimum_role
+
+
+def require_accounts_role(
+    conn: sqlite3.Connection,
+    account_ids: list[int],
+    service_id: int,
+    minimum_role: str,
+    *,
+    all_linked_services: bool = False,
+) -> str:
+    """Authorize an ordered, deduplicated bulk account selection.
+
+    ``account_ids`` is the non-empty, positive, order-preserving, deduplicated,
+    at-most-200 output of ``_bulk_account_ids()``; treat that as a precondition.
+
+    Raises:
+      NotFound: first selected account not linked to the initiating service.
+      Forbidden: first selected account that fails the required role.
+
+    Side effects on Forbidden mirror :func:`require_account_role`: append one
+    ``authorization.failed`` audit event and enqueue subscribed
+    ``authorization_failure`` deliveries atomically before aborting.
+    """
+    user = g.current_user
+    placeholders = ",".join("?" for _ in account_ids)
+    linked_to_initiating = {
+        row["account_id"]
+        for row in conn.execute(
+            f"SELECT account_id FROM account_service WHERE service_id = ? AND account_id IN ({placeholders})",
+            (service_id, *account_ids),
+        )
+    }
+    if _is_global_admin(user):
+        for account_id in account_ids:
+            if account_id not in linked_to_initiating:
+                abort(404)
+        return "admin"
+    if not all_linked_services:
+        role = get_user_service_role(conn, user, service_id)
+        sufficient = role is not None and SERVICE_ROLE_RANK[role] >= SERVICE_ROLE_RANK[minimum_role]
+        for account_id in account_ids:
+            if account_id not in linked_to_initiating:
+                abort(404)
+            if not sufficient:
+                with transaction(conn):
+                    _record_authorization_denial(
+                        conn,
+                        user_id=user["id"],
+                        target_type="service",
+                        target_id=service_id,
+                        service_id=service_id,
+                        required_role=minimum_role,
+                    )
+                abort(403)
+        assert role is not None
+        return role
+    account_links: dict[int, list[int]] = {}
+    for row in conn.execute(
+        f"SELECT account_id, service_id FROM account_service WHERE account_id IN ({placeholders}) ORDER BY account_id, service_id",
+        account_ids,
+    ):
+        account_links.setdefault(row["account_id"], []).append(row["service_id"])
+    membership = {
+        row["service_id"]: row["role"]
+        for row in conn.execute(
+            f"""
+            SELECT service_id, role
+            FROM service_members
+            WHERE user_id = ?
+              AND service_id IN (
+                SELECT DISTINCT service_id
+                FROM account_service
+                WHERE account_id IN ({placeholders})
+              )
+            ORDER BY service_id
+            """,
+            (user["id"], *account_ids),
+        )
+    }
+    minimum_rank = SERVICE_ROLE_RANK[minimum_role]
+    for account_id in account_ids:
+        if account_id not in linked_to_initiating:
+            abort(404)
+        for linked_service_id in account_links.get(account_id, ()):
+            role = membership.get(linked_service_id)
+            if role is None or SERVICE_ROLE_RANK[role] < minimum_rank:
+                with transaction(conn):
+                    _record_authorization_denial(
+                        conn,
+                        user_id=user["id"],
+                        target_type="account",
+                        target_id=account_id,
+                        service_id=service_id,
+                        required_role=minimum_role,
+                    )
+                abort(403)
     return minimum_role

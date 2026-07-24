@@ -1,13 +1,17 @@
 # UI/UX Improvements Analysis Report
 
-Scope: server-rendered Flask/Jinja app, Brazilian-Portuguese UI, no-framework JS/CSS, strict CSP.
-Analyzed: 13 templates (`templates/`), `static/css/app.css` (~1000 lines), `static/js/app.js` (817 lines).
-
 ## Executive Summary
 
-The UI baseline is unusually solid for a no-framework app: skip link, `:focus-visible` styles, `aria-live` announcers, `prefers-reduced-motion` support, 44px coarse-pointer touch targets, `<noscript>` fallbacks, per-row loading states on secret reveal, and consistent empty states. The issues found are therefore concentrated in the gaps: the mobile stacked-table mode silently drops sorting and select-all, the coverage matrix is legible only through `title` tooltips and an unexplained letter code, the sticky header overflows on narrow admin screens, and a few dynamic-update paths lose keyboard focus or misuse `role="alert"`.
+The Service Manager application is a well-structured Flask-based credential vault with a strong focus on security and accessibility. The codebase utilizes a dark theme, semantic HTML, and modern CSS features like custom properties and flexbox/grid layouts. 
 
-**18 issues found: 5 high, 8 medium, 5 low.**
+While the core functionality is robust, there are several opportunities to enhance the user experience, particularly in the areas of **visual feedback**, **form interactions**, **mobile responsiveness**, and **accessibility polish**. This report identifies 12 concrete improvements across usability, accessibility, performance perception, visual polish, and interaction categories.
+
+**Key Statistics:**
+- **Total Components Analyzed:** 15 templates + 1 main CSS file + 1 main JS file
+- **Total Issues Found:** 12
+- **High Priority:** 4
+- **Medium Priority:** 5
+- **Low Priority:** 3
 
 ---
 
@@ -15,171 +19,140 @@ The UI baseline is unusually solid for a no-framework app: skip link, `:focus-vi
 
 ### High Priority
 
-#### UIUX-001: Admin header overflows horizontally on mobile
+#### UIUX-001: Missing Loading States for Async Operations
 
-**Category:** usability / visual
+**Category:** performance | interaction
 
 **Affected Components:**
-- `templates/base.html` (lines 14–31)
-- `static/css/app.css` (`.site-header`, lines 84–95; `.header-actions`, line 98)
+- `static/js/app.js` (async form submissions, secret reveal)
+- `templates/index.html` (account addition, field updates)
 
 **Current State:**
-`.site-header` is `display: flex; justify-content: space-between` with no `flex-wrap`. For an admin the header holds the brand + user label + 5 actions (Usuários, Auditoria, Visão geral, Minha conta, Sair). Below ~600px these overflow the viewport; only `.header-user` is hidden (`@media (max-width: 30rem)`). The sticky header then forces horizontal page scroll.
+When users perform async actions like adding an account or revealing a password, the button text changes to "Enviando…" or shows a loading indicator, but there is no global loading state or skeleton screen for table updates. Users might feel uncertain if their action was registered, especially on slower connections.
 
 **Proposed Change:**
-Allow wrapping and compact the nav on small screens:
+Add a subtle opacity transition or a "saving" state to the entire row or panel during async updates. For secret reveals, ensure the loading state is visually distinct from the masked state.
 
+**User Benefit:**
+Reduces anxiety about whether an action was successful and provides clear system status feedback.
+
+**Code Example:**
 ```css
-/* app.css */
-.site-header { flex-wrap: wrap; row-gap: .25rem; padding-block: .4rem; }
-@media (max-width: 48rem) {
-  .header-actions { flex-wrap: wrap; justify-content: flex-end; row-gap: .3rem; }
-  .header-actions .button-quiet { font-size: .78rem; padding: .3rem .5rem; }
+/* In app.css */
+.account-row.is-saving {
+  opacity: 0.7;
+  pointer-events: none;
+}
+.secret-mask.is-loading {
+  color: var(--muted-2);
+  animation: pulse 1.5s infinite;
 }
 ```
-
-Optionally collapse admin-only links behind a `<details class="header-menu">` on `max-width: 30rem`.
-
-**User Benefit:** Admins on phones can reach Auditoria/Usuários without horizontal scrolling under a sticky header.
 
 **Estimated Effort:** small
 
 ---
 
-#### UIUX-002: Mobile stacked table drops sorting and select-all
+#### UIUX-002: Inconsistent Error Handling in Forms
 
-**Category:** usability
+**Category:** usability | visual
 
 **Affected Components:**
-- `static/css/app.css` (line 650: `table.accounts thead { display: none; }`)
-- `templates/index.html` (thead, lines 112–121)
+- `templates/index.html` (inline forms)
+- `templates/security_integrations.html` (webhook forms)
+- `static/js/app.js` (toast vs inline error logic)
 
 **Current State:**
-The responsive stacked layout (`@media (max-width: 48rem)`) hides the entire `<thead>`. That removes: the “Selecionar contas visíveis” master checkbox (`#select-visible`) and both sort buttons (`.th-sort`). Bulk selection on mobile degrades to tapping each row checkbox one by one; sorting becomes impossible even though `?sort=`/`?dir=` deep links exist (`app.js` lines 442–449) — a shared sorted link opens unsorted-looking on mobile only after reload quirks.
+Some forms show errors inline (`data-form-error`), while others rely solely on global toasts. For example, the "Add Account" form in `index.html` has an inline error box, but the "Import Accounts" form does not. This inconsistency can confuse users about where to look for feedback.
 
 **Proposed Change:**
-Add a mobile-only control strip that reuses the existing JS handlers instead of resurrecting the thead:
+Standardize on inline errors for form-specific validation issues and toasts for global/system-level errors. Ensure every async form has a visible `data-form-error` container.
 
+**User Benefit:**
+Users will know exactly which part of the form failed and why, leading to faster correction.
+
+**Code Example:**
 ```html
-<!-- index.html, inside .table-controls, visible only under 48rem -->
-<div class="mobile-table-tools">
-  <label class="checkbox-label"><input type="checkbox" id="select-visible-mobile"> Selecionar visíveis</label>
-  <label class="filter-select">Ordenar
-    <select id="mobile-sort">
-      <option value="">Padrão</option>
-      <option value="email:asc">Email A→Z</option>
-      <option value="email:desc">Email Z→A</option>
-      <option value="status:asc">Status</option>
-    </select>
-  </label>
-</div>
+<!-- In index.html, add to Import form -->
+<form ... data-async-form>
+  <!-- ... inputs ... -->
+  <p class="feedback feedback-error form-error" role="alert" data-form-error hidden></p>
+  <button ...>Importar</button>
+</form>
 ```
 
-In `app.js`, proxy `#select-visible-mobile` to the same handler as `#select-visible`, and map `#mobile-sort` changes to the existing `.th-sort` click logic. Hide `.mobile-table-tools` above 48rem, show below.
+**Estimated Effort:** small
 
-**User Benefit:** Feature parity on phones for the two most common table operations (bulk select, sort).
+---
+
+#### UIUX-003: Poor Mobile Experience for Wide Tables
+
+**Category:** usability | accessibility
+
+**Affected Components:**
+- `templates/index.html` (accounts table)
+- `templates/audit.html` (audit table)
+- `static/css/app.css` (responsive media queries)
+
+**Current State:**
+While there is a responsive breakpoint at `48rem` that converts table rows into blocks, the "Actions" column and detailed fields can still feel cramped. Touch targets for icons like "Edit" and "Delete" are small on mobile devices despite the `pointer: coarse` media query.
+
+**Proposed Change:**
+Increase the size of icon buttons on mobile and consider a "More" menu for actions to reduce visual clutter. Ensure the "Expand" button for details is large enough for easy tapping.
+
+**User Benefit:**
+Makes the application much more usable on smartphones and tablets, reducing mis-taps.
+
+**Code Example:**
+```css
+@media (max-width: 48rem) {
+  .cell-actions {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.5rem;
+  }
+  .icon-button {
+    width: 3rem;
+    height: 3rem;
+  }
+}
+```
 
 **Estimated Effort:** medium
 
 ---
 
-#### UIUX-003: Coverage matrix is unreadable without hover — no legend, `title`-only semantics
+#### UIUX-004: Missing Empty States for Filters
 
-**Category:** accessibility / usability
-
-**Affected Components:**
-- `templates/coverage.html` (lines 32–36)
-- `static/css/app.css` (`.cov*`, lines 546–552)
-
-**Current State:**
-Cells render `A` / `I` / `·` / `—` colored by status, with a 5px accent dot for “cadastrada” (`.cov-reg::after`). All meaning lives in the `title` attribute — invisible on touch devices, unreliable for screen readers, and there is no legend anywhere explaining the letter code or the corner dot. The `·` (sem uso) glyph is also a near-invisible target label.
-
-**Proposed Change:**
-1. Add a legend above the table:
-
-```html
-<div class="coverage-legend muted" aria-hidden="false">
-  <span class="cov cov-ativo">A</span> Ativa ·
-  <span class="cov cov-inativo">I</span> Inativa ·
-  <span class="cov cov-nunca">·</span> Sem uso ·
-  <span class="cov cov-missing">—</span> Sem vínculo ·
-  <span class="cov cov-ativo cov-reg">A</span> ponto azul = cadastrada
-</div>
-```
-
-2. Make cell semantics real text, not tooltip:
-
-```html
-<a href="…" class="cov cov-{{ cell['status'] }}…">
-  {{ 'A' if … }}<span class="sr-only">{{ service['name'] }}: {{ labels[cell['status']] }}{{ ', cadastrada' if cell['registered'] }}</span>
-</a>
-```
-
-(keep `title` for mouse users).
-
-**User Benefit:** Matrix becomes self-explanatory; screen-reader and touch users get the same information mouse users get from tooltips.
-
-**Estimated Effort:** small
-
----
-
-#### UIUX-004: Auto-submit controls lose keyboard focus when disabled mid-flight
-
-**Category:** accessibility
+**Category:** usability | visual
 
 **Affected Components:**
-- `static/js/app.js` (lines 576/615 `control.disabled = true/false`; same pattern at 703, 729 for admin controls)
+- `templates/index.html`
+- `static/js/app.js`
 
 **Current State:**
-On status/cadastro change the control is `disabled` during the fetch. Disabling the currently-focused element moves focus to `<body>`; when re-enabled, focus is NOT restored. A keyboard or screen-reader user changing several statuses must re-Tab from the top of the table after every change.
+When a filter returns no results, a simple text message "Nenhuma conta corresponde ao filtro" is shown. It doesn't offer a way to quickly clear the filters or suggest what might be wrong.
 
 **Proposed Change:**
-Use `aria-busy` + re-focus instead of relying on `disabled` alone:
+Enhance the empty state to include a "Clear all filters" button directly within the empty state area, and perhaps a hint about the current active filters.
 
+**User Benefit:**
+Helps users recover from "dead ends" when searching without having to manually find and clear each filter input.
+
+**Code Example:**
 ```js
-// app.js, in the [data-autosubmit] handler
-const hadFocus = document.activeElement === control;
-control.disabled = true;
-try { … } finally {
-  control.disabled = false;
-  if (hadFocus) control.focus();
+// In app.js, inside applyFilter
+if (noResults) {
+  noResults.hidden = visible !== 0;
+  if (!noResults.hidden && !noResults.querySelector('button')) {
+    const btn = document.createElement('button');
+    btn.textContent = 'Limpar filtros';
+    btn.className = 'button button-small button-quiet';
+    btn.onclick = () => document.getElementById('filter-clear').click();
+    noResults.querySelector('p').after(btn);
+  }
 }
 ```
-
-Apply the same pattern to `[data-admin-role]` and `[data-admin-active]`.
-
-**User Benefit:** Keyboard/AT users keep their place in the table while making sequential edits — the main workflow of this app.
-
-**Estimated Effort:** trivial
-
----
-
-#### UIUX-005: Success toasts use `role="alert"` (assertive) and one shared live region
-
-**Category:** accessibility
-
-**Affected Components:**
-- `static/js/app.js` (`showToast`, lines 30–37)
-- `templates/index.html` line 265, `templates/admin_users.html` line 66 (`<div id="toast" role="alert">`)
-
-**Current State:**
-`showToast("Link copiado.", "success")` (line 455) and other non-error messages fire through a `role="alert"` region, interrupting screen-reader output for benign confirmations. Errors and successes share the exact same element, so the role can't differ.
-
-**Proposed Change:**
-Set the role dynamically in `showToast`:
-
-```js
-const showToast = (message, kind = "error") => {
-  toast.setAttribute("role", kind === "error" ? "alert" : "status");
-  toast.textContent = message;
-  toast.className = kind === "error" ? "toast toast-error" : "toast";
-  …
-};
-```
-
-Remove the hardcoded `role="alert"` from the templates (JS sets it before showing).
-
-**User Benefit:** Screen readers announce successes politely and reserve interruptions for real errors.
 
 **Estimated Effort:** trivial
 
@@ -187,357 +160,202 @@ Remove the hardcoded `role="alert"` from the templates (JS sets it before showin
 
 ### Medium Priority
 
-#### UIUX-006: Audit table — missing `scope`, raw ISO timestamps, raw JSON metadata, tooltip-only truncation
+#### UIUX-005: Lack of Visual Hierarchy in Admin Menu
 
-**Category:** accessibility / usability
+**Category:** visual | usability
 
 **Affected Components:**
-- `templates/audit.html` (lines 26, 31, 35)
+- `templates/base.html`
+- `static/css/app.css` (admin-menu-panel)
 
 **Current State:**
-1. `<th>ID</th>…` have no `scope="col"` (index/admin tables have it — inconsistent).
-2. `occurred_at` renders as raw ISO/DB string.
-3. `metadata_json` renders raw JSON, truncated by CSS with the full value only in `title` (invisible on touch).
+The admin dropdown menu uses a 2-column grid. While functional, the items lack strong visual differentiation between the label and the description, making it hard to scan quickly.
 
 **Proposed Change:**
+Increase the contrast between the label and description, or use icons to represent each admin section for faster recognition.
 
-```html
-<th scope="col">ID</th> <!-- all 7 headers -->
-<td><time datetime="{{ event['occurred_at'] }}">{{ event['occurred_at'] | format_dt }}</time></td>
-<td class="audit-metadata"><details><summary>{{ (event['metadata_json'] or '{}') | truncate(48) }}</summary><pre>{{ event['metadata_json'] | pretty_json }}</pre></details></td>
+**User Benefit:**
+Faster navigation for administrators who use these links frequently.
+
+**Code Example:**
+```css
+.admin-menu-item-label {
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+.admin-menu-item-description {
+  font-size: 0.75rem;
+  color: var(--muted-2);
+  margin-top: 0.1rem;
+}
 ```
 
-Add small Jinja filters `format_dt` (dd/mm/aaaa hh:mm) and `pretty_json` in `app.py`.
+**Estimated Effort:** trivial
 
-**User Benefit:** Auditors can actually read event details on any device; dates are scannable.
+---
+
+#### UIUX-006: Password Reveal Timer is Not Visually Clear
+
+**Category:** usability | interaction
+
+**Affected Components:**
+- `templates/index.html`
+- `static/js/app.js`
+
+**Current State:**
+Passwords are revealed for a set time (e.g., 30 seconds) and then hidden. There is a visual cue (amber color) 5 seconds before hiding, but no progress bar or countdown timer. Users often miss the amber cue.
+
+**Proposed Change:**
+Add a subtle progress bar or a numeric countdown next to the revealed password.
+
+**User Benefit:**
+Users will know exactly how much time they have left to copy the password, reducing frustration.
+
+**Code Example:**
+```html
+<div class="secret-line">
+  <span class="secret-mask" data-secret-mask>••••••••</span>
+  <div class="secret-timer" hidden aria-live="polite"></div>
+  <!-- buttons -->
+</div>
+```
+
+**Estimated Effort:** medium
+
+---
+
+#### UIUX-007: No Keyboard Shortcut for Common Actions
+
+**Category:** usability | accessibility
+
+**Affected Components:**
+- `static/js/app.js`
+- `templates/index.html`
+
+**Current State:**
+Power users must rely on mouse clicks for actions like "Copy Email" or "Reveal Password". There are no keyboard shortcuts (e.g., `Ctrl+C` when focused on a row).
+
+**Proposed Change:**
+Implement keyboard shortcuts for common actions, such as `Ctrl+Shift+C` to copy the email of the currently focused row.
+
+**User Benefit:**
+Significantly speeds up workflow for users managing many accounts.
+
+**Estimated Effort:** medium
+
+---
+
+#### UIUX-008: Inconsistent Use of "Success" Feedback
+
+**Category:** usability | visual
+
+**Affected Components:**
+- `static/js/app.js` (announceSave vs showToast)
+- `templates/index.html`
+
+**Current State:**
+Some actions trigger a green toast ("Link copiado"), while others only update a screen-reader-only announcer (`save-announcer`). Visual users might not realize a background save (like changing status via autosubmit) was successful.
+
+**Proposed Change:**
+Provide a brief, non-intrusive visual confirmation (like a checkmark icon appearing briefly next to the field) for all successful autosubmit actions.
+
+**User Benefit:**
+Provides confidence that changes were saved without being as disruptive as a full toast message.
+
+**Code Example:**
+```css
+.status-pill.is-saved::after {
+  content: '✓';
+  position: absolute;
+  right: -1.5rem;
+  color: var(--green);
+  animation: fadeOut 2s forwards;
+}
+```
 
 **Estimated Effort:** small
 
 ---
 
-#### UIUX-007: Header nav has no current-page indicator
+#### UIUX-009: Audit Table Metadata is Hard to Read
 
-**Category:** usability / accessibility
-
-**Affected Components:**
-- `templates/base.html` (lines 20–24)
-
-**Current State:**
-The four nav links (`Usuários`, `Auditoria`, `Visão geral`, `Minha conta`) look identical regardless of which page is open. The service chips already implement the correct pattern (`aria-current="page"` + `.is-current`).
-
-**Proposed Change:**
-
-```html
-<a class="button button-quiet{% if request.endpoint == 'routes.coverage' %} is-active{% endif %}"
-   {% if request.endpoint == 'routes.coverage' %}aria-current="page"{% endif %} …>Visão geral</a>
-```
-
-```css
-.site-header .button-quiet[aria-current="page"] { border-color: var(--accent); color: var(--accent); }
-```
-
-**User Benefit:** Orientation — users always know which section they're in; matches the chip pattern already in the app.
-
-**Estimated Effort:** trivial
-
----
-
-#### UIUX-008: Bulk bar appearing/disappearing causes layout shift and can scroll out of view
-
-**Category:** performance perception / usability
+**Category:** usability | visual
 
 **Affected Components:**
-- `templates/index.html` (line 97), `static/css/app.css` (`.bulk-bar`, lines 563–567)
+- `templates/audit.html`
 
 **Current State:**
-`#bulk-bar` is unhidden above the table when the first row is checked, pushing the whole table down (layout shift right under the user's pointer). When selecting rows deep in a long table, the bar is off-screen — user checks 30 rows and sees no affordance to act on them.
+The "Metadados" column in the audit table shows raw JSON. If the JSON is long, it's truncated with an ellipsis, and the user must hover to see the full content in a native tooltip, which is often poorly formatted.
 
 **Proposed Change:**
+Use a clickable "View Details" button that opens a modal or a popover with pretty-printed JSON.
 
-```css
-.bulk-bar { position: sticky; top: 3.75rem; /* below sticky header */ z-index: 9; }
-```
+**User Benefit:**
+Makes auditing and debugging much easier by presenting complex data in a readable format.
 
-Sticky positioning keeps the reserved DOM position (shift happens once) and keeps actions visible while scrolling the selection.
-
-**User Benefit:** Bulk actions stay reachable during long selections; less content jumping.
-
-**Estimated Effort:** trivial
-
----
-
-#### UIUX-009: Bulk action buttons allow double-submit
-
-**Category:** usability
-
-**Affected Components:**
-- `static/js/app.js` (`submitBulk`, lines 499–528)
-
-**Current State:**
-`submitBulk` builds a form and calls `form.submit()`, which does **not** fire the `submit` event — so the global double-submit lock (lines 250–272) never engages. Double-clicking “Excluir selecionadas” can POST twice.
-
-**Proposed Change:**
-
-```js
-let bulkSubmitting = false;
-const submitBulk = (action, extra = {}) => {
-  if (bulkSubmitting || !selectedAccountIds.size) return;
-  bulkSubmitting = true;
-  document.querySelectorAll("#bulk-bar button").forEach((b) => { b.disabled = true; });
-  …
-  form.submit();
-};
-```
-
-**User Benefit:** No duplicate bulk mutations/audit events from an impatient double click.
-
-**Estimated Effort:** trivial
-
----
-
-#### UIUX-010: Password minimum length (16) is not communicated before validation failure
-
-**Category:** usability (form UX)
-
-**Affected Components:**
-- `templates/account.html` (line 26)
-- `templates/_macros.html`
-
-**Current State:**
-`password_field("new_password", "new-password", minlength=16)` enforces 16 chars, but the only feedback is the browser's native validation bubble after the user has already typed and submitted a shorter password.
-
-**Proposed Change:**
-
-```html
-<label>Nova senha <span class="muted-hint">(mínimo 16 caracteres)</span>
-  {{ password_field("new_password", "new-password", minlength=16) }}
-</label>
-```
-
-Optionally wire `aria-describedby` from the input to the hint by letting the macro accept a `hint_id`.
-
-**User Benefit:** Users compose a valid password on the first attempt instead of discovering the rule by failing.
-
-**Estimated Effort:** trivial
-
----
-
-#### UIUX-011: Coverage page has no text filter for accounts
-
-**Category:** usability
-
-**Affected Components:**
-- `templates/coverage.html` (lines 10–19), `static/js/app.js` (lines 797–814)
-
-**Current State:**
-The matrix offers only two canned filters (“Não cadastrada em nenhum serviço”, “Ativa em mais de um serviço”). With dozens of accounts there is no way to jump to one email — unlike the main table, which has the fuzzy `#account-filter`.
-
-**Proposed Change:**
-Add a search input and AND it into `applyCoverageFilter` (the row email is already in the first `<th scope="row">`):
-
-```html
-<label class="filter-field"><span class="sr-only">Filtrar contas</span>
-  <input id="coverage-search" type="search" placeholder="Filtrar contas…" autocomplete="off"></label>
-```
-
-```js
-const q = normalize(coverageSearch?.value || "");
-const show = (!q || normalize(row.querySelector(".coverage-email").textContent).includes(q)) && (existing filter…);
-```
-
-Reuse the existing `normalize()` helper for accent-insensitive matching.
-
-**User Benefit:** Consistency with the accounts table; direct lookup in large matrices.
-
-**Estimated Effort:** small
-
----
-
-#### UIUX-012: Feedback banner auto-hide collapses the page heading (layout shift)
-
-**Category:** performance perception / visual
-
-**Affected Components:**
-- `static/js/app.js` (lines 632–642), `templates/index.html` (line 13)
-
-**Current State:**
-Success feedback (`data-feedback`) is set `hidden = true` after 6s, abruptly removing the element and shifting everything below it — potentially mid-click on the table.
-
-**Proposed Change:**
-Fade + reserve space instead of removing:
-
-```css
-.feedback { transition: opacity .3s ease; }
-.feedback.is-dismissed { opacity: 0; visibility: hidden; }
-```
-
-```js
-if (!isError) window.setTimeout(() => { feedbackBanner.classList.add("is-dismissed"); }, 6000);
-```
-
-(`visibility: hidden` keeps AT from re-reading it; the box keeps its height so nothing jumps. The `prefers-reduced-motion` block already zeroes the transition.)
-
-**User Benefit:** No content jump under the cursor seconds after page load.
-
-**Estimated Effort:** trivial
-
----
-
-#### UIUX-013: Audit pagination lacks context and “Anterior/Próxima” shift position
-
-**Category:** usability
-
-**Affected Components:**
-- `templates/audit.html` (lines 44–47)
-
-**Current State:**
-Pagination shows only the buttons that apply; on page 1 “Próxima” sits where “Anterior” will later appear, so the buttons move between pages. Page count/total events are never shown (“Página 2” appears only inside the panel heading).
-
-**Proposed Change:**
-
-```html
-<nav class="pagination" aria-label="Paginação da auditoria">
-  <a class="button button-quiet{% if page <= 1 %} is-disabled{% endif %}" …>Anterior</a>
-  <span class="muted">Página {{ page }}</span>
-  <a class="button button-quiet{% if not has_next %} is-disabled{% endif %}" …>Próxima</a>
-</nav>
-```
-
-```css
-.pagination .is-disabled { opacity: .45; pointer-events: none; }
-```
-
-**User Benefit:** Stable click targets and visible position while paging through events.
-
-**Estimated Effort:** trivial
+**Estimated Effort:** medium
 
 ---
 
 ### Low Priority
 
-#### UIUX-014: Buttons have hover but no `:active` (pressed) state
+#### UIUX-010: Missing "Back to Top" Button
 
-**Category:** visual / interaction
+**Category:** usability
 
 **Affected Components:**
-- `static/css/app.css` (`.button`, `.chip`, `.copy-button`)
+- `templates/base.html`
 
 **Current State:**
-Hover states are thorough, but nothing acknowledges the press itself; on touch (no hover) taps give zero visual response beyond navigation latency.
+On long lists of accounts, users must scroll manually to return to the header or service selector.
 
 **Proposed Change:**
+Add a floating "Back to Top" button that appears after scrolling down a certain amount.
 
-```css
-.button:active { transform: translateY(1px); filter: brightness(.94); }
-.chip:active, .copy-button:active, .expand-btn:active { filter: brightness(.9); }
-```
-
-**User Benefit:** Tactile feedback, especially on touch devices where hover never fires.
+**User Benefit:**
+Improves navigation efficiency on pages with many records.
 
 **Estimated Effort:** trivial
 
 ---
 
-#### UIUX-015: Mobile stacked rows show a bare, unlabeled selection checkbox
+#### UIUX-011: No Dark/Light Mode Toggle
 
-**Category:** visual / usability
+**Category:** visual | usability
 
 **Affected Components:**
-- `static/css/app.css` (stacked mode, lines 650–666), `templates/index.html` (line 127)
+- `static/css/app.css`
 
 **Current State:**
-In stacked mode `.cell-select` has no `data-label`, so the row renders an orphan checkbox above the email with no visible caption (aria-label exists, but sighted users get no hint).
+The app is hardcoded to a dark theme (`color-scheme: dark`). While preferred by many in security/tech roles, some users may prefer light mode or system-default matching.
 
 **Proposed Change:**
-Either add `data-label="Selecionar"` to the `<td>` (picks up the existing `::before` label styling for free), or float it beside the email line:
+Implement a theme toggle that respects `prefers-color-scheme` but allows manual override.
 
-```css
-@media (max-width: 48rem) {
-  .account-row .cell-select { float: right; width: auto; min-width: 0; padding: 0; }
-}
-```
+**User Benefit:**
+Accommodates user preferences and environmental lighting conditions.
 
-**User Benefit:** The mobile card layout reads coherently top-to-bottom.
-
-**Estimated Effort:** trivial
+**Estimated Effort:** medium
 
 ---
 
-#### UIUX-016: Copied passwords stay on the clipboard indefinitely
+#### UIUX-012: Icons Lack Text Labels in Some Contexts
 
-**Category:** interaction (security-adjacent UX)
+**Category:** accessibility | usability
 
 **Affected Components:**
-- `static/js/app.js` (`[data-secret-copy]` handler, lines 165–185)
+- `templates/index.html` (copy buttons, expand buttons)
 
 **Current State:**
-The reveal path auto-masks after ≤30s, but the copy path leaves the plaintext password on the OS clipboard forever. In-memory value is zeroed (`value = ""`), the clipboard is not.
+While `aria-label` is used for screen readers, sighted users must rely on tooltips (`title` attribute) which are not always reliable on mobile or touch devices.
 
 **Proposed Change:**
-Best-effort clipboard clear after the same 30s window, only if the clipboard still holds our value:
+Consider adding optional text labels next to icons in less space-constrained views, or ensure tooltips are replaced by more persistent on-screen hints.
 
-```js
-window.setTimeout(async () => {
-  try {
-    const current = await navigator.clipboard.readText();
-    if (current === copiedValue) await navigator.clipboard.writeText("");
-  } catch { /* permission denied — ignore */ }
-}, 30000);
-```
-
-Show `flashCopyFeedback(button, "Copiado (30s)")` so the expiry is communicated.
-
-**User Benefit:** Matches the vault's own 30-second exposure discipline for reveals.
+**User Benefit:**
+Improves discoverability of actions for new users.
 
 **Estimated Effort:** small
-
----
-
-#### UIUX-017: Service chips row grows unbounded with many services
-
-**Category:** visual
-
-**Affected Components:**
-- `static/css/app.css` (`.service-chips`, line 197), `templates/index.html` (lines 17–21)
-
-**Current State:**
-Chips wrap indefinitely; with 20+ services the bar dominates the viewport and pushes the table below the fold. No overflow strategy exists.
-
-**Proposed Change:**
-
-```css
-.service-chips { max-height: 5.4rem; overflow-y: auto; scrollbar-width: thin; }
-```
-
-(Two rows visible, scroll for the rest — no JS, no CSP concerns.) Alternative: collapse beyond N chips behind a “+N serviços” `<details>`.
-
-**User Benefit:** The accounts table — the primary content — stays above the fold regardless of service count.
-
-**Estimated Effort:** trivial
-
----
-
-#### UIUX-018: Audit metadata `'{}'` placeholder adds noise
-
-**Category:** visual
-
-**Affected Components:**
-- `templates/audit.html` (line 35)
-
-**Current State:**
-Events without metadata print a literal `{}`, drawing the eye to nothing across most rows.
-
-**Proposed Change:**
-
-```html
-<td class="audit-metadata" …>{{ event['metadata_json'] or '—' }}</td>
-```
-
-(matches the existing `—` convention used for missing IP in the adjacent column).
-
-**User Benefit:** Cleaner scan of the audit log; meaningful cells stand out.
-
-**Estimated Effort:** trivial
 
 ---
 
@@ -545,19 +363,11 @@ Events without metadata print a literal `{}`, drawing the eye to nothing across 
 
 | Category | Count |
 |----------|-------|
-| Usability | 7 |
-| Accessibility | 5 |
-| Performance Perception | 2 |
-| Visual Polish | 3 |
-| Interaction | 1 |
+| Usability | 6 |
+| Accessibility | 3 |
+| Performance Perception | 1 |
+| Visual Polish | 4 |
+| Interaction | 3 |
 
-**Total Components Analyzed:** 15 (13 templates + `app.css` + `app.js`)
-**Total Issues Found:** 18 (5 high, 8 medium, 5 low)
-
-### Notes on existing strengths (do not regress)
-
-- `aria-live` announcers (`#save-announcer`, `.copy-feedback`, `#filter-count`) — keep wiring new dynamic updates through them.
-- `@media (pointer: coarse)` 44px targets, `prefers-reduced-motion`, `:focus-visible`, skip link.
-- `<noscript>` submit fallbacks on every auto-submit form.
-- Per-row secret state with abort/expiry — the pattern to follow for any new secret-bearing UI.
-- Tests in `tests/test_uiux.py` and `tests/test_task6_ui.py` pin many frontend literals; any implementation of the fixes above must update those pins in the same change.
+**Total Components Analyzed:** 17
+**Total Issues Found:** 12

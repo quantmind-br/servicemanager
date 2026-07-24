@@ -25,6 +25,7 @@ from service_manager.db import SCHEMA
 from service_manager.webhooks import (
     WebhookError,
     deliver_once,
+    list_webhook_configs,
     enqueue_webhook_event,
     purge_webhook_deliveries,
     run_worker,
@@ -413,3 +414,89 @@ def test_purge_only_removes_old_terminal_rows(tmp_path):
     remaining = {r["status"] for r in conn.execute("SELECT status FROM webhook_deliveries").fetchall()}
     assert remaining == {"pending", "retry", "delivering", "succeeded"}
     assert conn.execute("SELECT COUNT(*) FROM webhook_deliveries").fetchone()[0] == 4
+
+
+# --------------------------------------------------------------------------
+# Bounded listing (PERF-004)
+# --------------------------------------------------------------------------
+
+
+class _ExecCounter:
+    """Wrap a connection, counting only direct execute() calls."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+        self.calls = 0
+
+    def execute(self, statement, params=()):
+        self.calls += 1
+        return self._conn.execute(statement, params)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def _insert_delivery(conn, cid, *, status="succeeded", last_error=None):
+    now = datetime.now(UTC).isoformat()
+    cur = conn.execute(
+        "INSERT INTO webhook_deliveries (config_id, event_type, payload_json, status, next_attempt_at, created_at, last_error) "
+        "VALUES (?, 'login_failures', '{}', ?, ?, ?, ?)",
+        (cid, status, now, now, last_error),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def test_list_webhook_configs_uses_three_queries_for_twenty(tmp_path):
+    conn = _make_db(tmp_path / "wh.db")
+    for i in range(20):
+        _insert_config(conn, f"https://{HOST}/hook{i}", b"s" * 32)
+    assert sqlite3.sqlite_version_info >= (3, 25, 0)
+    proxy = _ExecCounter(conn)
+    result = list_webhook_configs(proxy)
+    assert proxy.calls == 3
+    assert len(result) == 20
+    ids = [c["id"] for c in result]
+    assert ids == sorted(ids)
+
+
+def test_list_webhook_configs_empty_uses_one_query(tmp_path):
+    conn = _make_db(tmp_path / "wh.db")
+    proxy = _ExecCounter(conn)
+    result = list_webhook_configs(proxy)
+    assert result == []
+    assert proxy.calls == 1
+
+
+def test_list_webhook_configs_preserves_child_contracts(tmp_path):
+    conn = _make_db(tmp_path / "wh.db")
+    cid1 = _insert_config(conn, f"https://{HOST}/one", b"s" * 32)
+    cid2 = _insert_config(conn, f"https://{HOST}/two", b"t" * 32)
+    _insert_config(conn, f"https://{HOST}/gone", b"u" * 32, deleted=datetime.now(UTC).isoformat())
+    # Subscriptions inserted out of lexical order for the first config.
+    conn.execute("INSERT INTO webhook_subscriptions (config_id, event_type) VALUES (?, 'reveal_rate_limit')", (cid1,))
+    conn.execute("INSERT INTO webhook_subscriptions (config_id, event_type) VALUES (?, 'authorization_failure')", (cid1,))
+    conn.execute("INSERT INTO webhook_subscriptions (config_id, event_type) VALUES (?, 'login_failures')", (cid1,))
+    conn.commit()
+    # 12 deliveries on the first config; the two newest carry a generic and a non-generic error.
+    delivery_ids = []
+    for i in range(12):
+        if i == 10:
+            did = _insert_delivery(conn, cid1, status="failed", last_error="timeout")
+        elif i == 11:
+            did = _insert_delivery(conn, cid1, status="failed", last_error="http://internal.host/secret-path")
+        else:
+            did = _insert_delivery(conn, cid1)
+        delivery_ids.append(did)
+    result = list_webhook_configs(conn)
+    assert [c["id"] for c in result] == [cid1, cid2]
+    first, second = result
+    assert first["subscriptions"] == ["authorization_failure", "login_failures", "reveal_rate_limit"]
+    recent = first["recent_deliveries"]
+    assert [d["id"] for d in recent] == sorted(delivery_ids, reverse=True)[:10]
+    assert all("config_id" not in d for d in recent)
+    errors = {d["id"]: d["last_error"] for d in recent}
+    assert errors[delivery_ids[10]] == "timeout"
+    assert errors[delivery_ids[11]] == "connection"
+    assert second["subscriptions"] == []
+    assert second["recent_deliveries"] == []

@@ -434,7 +434,7 @@ def test_app_js_new_behaviors(client):
         "th-sort",
         '"added"',
         'searchParams.has("ok")',
-        "refreshStatusLabel(row)",
+        '[data-row-select], [data-autosubmit]',
     ):
         assert literal in script
 
@@ -475,17 +475,16 @@ def test_app_js_bulk_selection_persists_and_typed_delete(client):
     assert "window.location.assign(response.url)" in script
 
 
-def test_app_js_coverage_missing_registration_filter(client):
+def test_app_js_coverage_filter_navigates_server_side(client):
     script = client.get("/static/js/app.js").get_data(as_text=True)
 
-    for literal in (
-        "missing-registration",
-        "data-coverage-service",
-        'getAttribute("data-reg-svc-"',
-        "checkedServices.length === 0",
-        "coverage-service-filter",
-    ):
+    # The filter form drives a server-side query; showing the selected-service
+    # fieldset for missing-registration is the only client-side behavior kept.
+    for literal in ("coverage-form", "missing-registration", "coverage-service-filter", "requestSubmit"):
         assert literal in script
+    # The full-table client-side row scan is gone.
+    assert 'getAttribute("data-reg-svc-"' not in script
+    assert "coverageRows" not in script
 
 
 def test_app_js_rotation_filter_combines_with_url_state(client):
@@ -493,8 +492,8 @@ def test_app_js_rotation_filter_combines_with_url_state(client):
 
     for literal in (
         "filter-rotation",
-        "dataset.rotation",
-        "rot:",
+        "navigateAccounts",
+        'set("rot"',
     ):
         assert literal in script
 

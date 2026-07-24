@@ -171,6 +171,31 @@ def test_config_cap_enforced_at_twenty(app, client):
         assert get_db().execute("SELECT COUNT(*) FROM webhook_configs").fetchone()[0] == 20
 
 
+def test_security_integrations_capacity_uses_loaded_configs(app, client, monkeypatch):
+    login_admin(client)
+    with app.app_context():
+        conn = get_db()
+        with transaction(conn):
+            for i in range(20):
+                conn.execute(
+                    "INSERT INTO webhook_configs (destination_host, url_ciphertext, url_nonce, url_key_version, "
+                    "signing_secret_ciphertext, signing_secret_nonce, signing_secret_key_version, created_at, updated_at) "
+                    "VALUES ('h.test', ?, ?, 1, ?, ?, 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                    (b"u", b"0" * 12, b"s", b"1" * 12),
+                )
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("count_active_configs must not run in the GET route")
+
+    monkeypatch.setattr("service_manager.routes.count_active_configs", _fail, raising=False)
+    response = client.get("/admin/security-integrations")
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "20 de 20 configurados" in html
+    assert "Limite de 20 integrações atingido" in html
+    assert "data-webhook-create" not in html
+
+
 def test_one_time_secret_never_in_listing_html(app, client):
     login_admin(client)
     secret = json.loads(_create(client).get_data(as_text=True))["signing_secret"]

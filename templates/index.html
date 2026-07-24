@@ -1,9 +1,7 @@
 {% extends "base.html" %}
-{% from "_macros.html" import password_field %}
+{% from "_macros.html" import password_field, copy_value, copy_input %}
 {% block title %}Contas de serviço · Service Manager{% endblock %}
 {% block content %}
-{% macro copy_value(label, value) %}<button class="copy-button" type="button" data-copy-value="{{ value }}" aria-label="Copiar {{ label }}" title="Copiar {{ label }}"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="5" y="5" width="8" height="9" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M11 5V3.4A1.4 1.4 0 0 0 9.6 2H3.4A1.4 1.4 0 0 0 2 3.4v6.2A1.4 1.4 0 0 0 3.4 11H5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg><span class="copy-feedback" aria-live="polite"></span></button>{% endmacro %}
-{% macro copy_input(label, input_id) %}<button class="copy-button" type="button" data-copy-input="{{ input_id }}" aria-label="Copiar {{ label }}" title="Copiar {{ label }}"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="5" y="5" width="8" height="9" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M11 5V3.4A1.4 1.4 0 0 0 9.6 2H3.4A1.4 1.4 0 0 0 2 3.4v6.2A1.4 1.4 0 0 0 3.4 11H5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg><span class="copy-feedback" aria-live="polite"></span></button>{% endmacro %}
 {% set is_admin = g.current_user and g.current_user['role'] == 'admin' %}
 {% set table_colspan = 6 + (1 if rotation_enabled else 0) %}
 
@@ -46,8 +44,8 @@
 
 <div class="table-controls">
   <div class="filter-meta">
-    <span id="filter-count" class="muted" aria-live="polite"></span>
-    <button id="filter-clear" class="button button-quiet button-small" type="button" hidden>Limpar filtros</button>
+    <span id="filter-count" class="muted" aria-live="polite">{% if filters_active %}Filtros ativos · mostrando {{ page_count }} conta(s) nesta página{% endif %}</span>
+    <button id="filter-clear" class="button button-quiet button-small" type="button"{% if not filters_active %} hidden{% endif %}>Limpar filtros</button>
     <button id="share-view" class="button button-quiet button-small" type="button">Copiar link da visão</button>
   </div>
   <div class="panel-row">
@@ -123,21 +121,21 @@
       <caption class="sr-only">Contas do serviço {{ current_name }}</caption>
       <thead>
         <tr>
-          {% if capabilities['edit'] or is_admin %}<th scope="col" class="cell-select"><input type="checkbox" id="select-visible" aria-label="Selecionar contas visíveis"></th>{% else %}<th scope="col" class="cell-select" aria-hidden="true"></th>{% endif %}
-          <th scope="col" class="filterable-column filter-email" data-column-filter="email" data-sort-col aria-sort="none">
+          {% if capabilities['edit'] or is_admin %}<th scope="col" class="cell-select"><input type="checkbox" id="select-visible" aria-label="Selecionar contas desta página"></th>{% else %}<th scope="col" class="cell-select" aria-hidden="true"></th>{% endif %}
+          <th scope="col" class="filterable-column filter-email" data-column-filter="email" data-sort-col aria-sort="{{ 'ascending' if sort == 'email' and direction == 'asc' else ('descending' if sort == 'email' and direction == 'desc' else 'none') }}">
             <div class="column-heading">
               <span class="column-heading-label"><button type="button" class="th-sort" data-sort="email">Email</button></span>
-              <span class="column-filter"><input id="account-filter" type="search" placeholder="Buscar email ou campo…" autocomplete="off" aria-label="Filtrar por email ou campo adicional"></span>
+              <span class="column-filter"><input id="account-filter" type="search" placeholder="Buscar email…" autocomplete="off" aria-label="Filtrar por email" value="{{ q }}"></span>
             </div>
           </th>
           <th scope="col">Senha</th>
-          <th scope="col" class="filterable-column filter-status" data-column-filter="status" data-sort-col aria-sort="none">
+          <th scope="col" class="filterable-column filter-status" data-column-filter="status" data-sort-col aria-sort="{{ 'ascending' if sort == 'status' and direction == 'asc' else ('descending' if sort == 'status' and direction == 'desc' else 'none') }}">
             <div class="column-heading">
               <span class="column-heading-label"><button type="button" class="th-sort" data-sort="status">Status</button></span>
               <span class="column-filter">
                 <select id="filter-status" aria-label="Filtrar por status">
                   <option value="">Todos</option>
-                  {% for sval, slabel in labels.items() %}<option value="{{ sval }}">{{ slabel }}</option>{% endfor %}
+                  {% for sval, slabel in labels.items() %}<option value="{{ sval }}"{% if st_filter == sval %} selected{% endif %}>{{ slabel }}</option>{% endfor %}
                 </select>
               </span>
             </div>
@@ -148,8 +146,8 @@
               <span class="column-filter">
                 <select id="filter-registered" aria-label="Filtrar por cadastro">
                   <option value="">Todos</option>
-                  <option value="1">Cadastrada</option>
-                  <option value="0">Não cadastrada</option>
+                  <option value="1"{% if reg_filter == '1' %} selected{% endif %}>Cadastrada</option>
+                  <option value="0"{% if reg_filter == '0' %} selected{% endif %}>Não cadastrada</option>
                 </select>
               </span>
             </div>
@@ -160,11 +158,11 @@
               <span class="column-filter">
                 <select id="filter-rotation" aria-label="Filtrar por rotação">
                   <option value="">Todas</option>
-                  <option value="overdue">{{ rotation_labels['overdue'] }}</option>
-                  <option value="due_soon">{{ rotation_labels['due_soon'] }}</option>
-                  <option value="current">{{ rotation_labels['current'] }}</option>
-                  <option value="no_policy">{{ rotation_labels['no_policy'] }}</option>
-                  <option value="unknown">{{ rotation_labels['unknown'] }}</option>
+                  <option value="overdue"{% if rot_filter == 'overdue' %} selected{% endif %}>{{ rotation_labels['overdue'] }}</option>
+                  <option value="due_soon"{% if rot_filter == 'due_soon' %} selected{% endif %}>{{ rotation_labels['due_soon'] }}</option>
+                  <option value="current"{% if rot_filter == 'current' %} selected{% endif %}>{{ rotation_labels['current'] }}</option>
+                  <option value="no_policy"{% if rot_filter == 'no_policy' %} selected{% endif %}>{{ rotation_labels['no_policy'] }}</option>
+                  <option value="unknown"{% if rot_filter == 'unknown' %} selected{% endif %}>{{ rotation_labels['unknown'] }}</option>
                 </select>
               </span>
             </div>
@@ -174,9 +172,7 @@
       </thead>
       <tbody>
       {% for row in rows %}
-        {% set search = namespace(value=row['email']) %}
-        {% for f in row['fields'] %}{% set search.value = search.value ~ ' ' ~ f['name'] ~ ' ' ~ (f['value'] or '') %}{% endfor %}
-        <tr class="account-row" id="row-{{ row['id'] }}" data-row data-id="{{ row['id'] }}" data-status="{{ row['status'] }}" data-registered="{{ 1 if row['registered'] else 0 }}"{% if rotation_enabled %} data-rotation="{{ row['rotation_state'] }}"{% endif %} data-search="{{ search.value | e }}">
+        <tr class="account-row" id="row-{{ row['id'] }}" data-row data-id="{{ row['id'] }}" data-status="{{ row['status'] }}" data-registered="{{ 1 if row['registered'] else 0 }}"{% if rotation_enabled %} data-rotation="{{ row['rotation_state'] }}"{% endif %}>
           {% if capabilities['edit'] or is_admin %}<td class="cell-select"><input type="checkbox" class="row-select" data-row-select value="{{ row['id'] }}" aria-label="Selecionar {{ row['email'] }}"></td>{% else %}<td class="cell-select" aria-hidden="true"></td>{% endif %}
           <td class="cell-email">
             <div class="email-line">
@@ -259,72 +255,19 @@
             {% endif %}
           </td>
         </tr>
-        <tr class="detail-row" id="detail-{{ row['id'] }}" hidden>
-          <td colspan="{{ table_colspan }}">
-            <div class="detail-body">
-              <div class="fields-block">
-                <h3>Campos adicionais</h3>
-                {% if row['fields'] %}
-                <div class="table-wrap">
-                  <table class="additional-fields">
-                    <thead><tr><th scope="col">Campo</th><th scope="col">Valor</th><th scope="col">Ações</th></tr></thead>
-                    <tbody>
-                      {% for field in row['fields'] %}
-                      {% set value_input_id = "field-" ~ field['field_id'] ~ "-" ~ row['id'] %}
-                      <tr>
-                        <td class="field-name-cell"><span class="field-name">{{ field['name'] }}</span>{{ copy_value("nome do campo", field['name']) }}</td>
-                        <td class="field-value-cell">
-                          {% if capabilities['edit'] %}
-                          <form class="compact-form field-value-form" method="post" action="{{ url_for('routes.field_update', field_id=field['field_id'], account_id=row['id']) }}">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="service_id" value="{{ current }}">
-                            <input id="{{ value_input_id }}" name="value" value="{{ field['value'] }}" maxlength="4096" aria-label="Valor de {{ field['name'] }}">
-                            {{ copy_input("valor do campo", value_input_id) }}
-                            <button class="button button-small button-quiet" type="submit">Salvar</button>
-                          </form>
-                          {% else %}
-                          <input id="{{ value_input_id }}" value="{{ field['value'] }}" readonly aria-label="Valor de {{ field['name'] }}">
-                          {{ copy_input("valor do campo", value_input_id) }}
-                          {% endif %}
-                        </td>
-                        <td class="field-actions-cell">
-                          {% if capabilities['delete'] %}
-                          <form class="inline-form" method="post" action="{{ url_for('routes.field_delete', field_id=field['field_id'], account_id=row['id']) }}" data-confirm="Excluir este campo desta conta?">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="service_id" value="{{ current }}">
-                            <button class="button button-small button-danger" type="submit">Excluir</button>
-                          </form>
-                          {% endif %}
-                        </td>
-                      </tr>
-                      {% endfor %}
-                    </tbody>
-                  </table>
-                </div>
-                {% else %}<p class="muted-hint">Nenhum campo adicional.</p>{% endif %}
-
-                {% if capabilities['edit'] %}
-                <details class="field-addition">
-                  <summary>Adicionar campo</summary>
-                  <form class="compact-form" method="post" action="{{ url_for('routes.field_add') }}">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input type="hidden" name="service_id" value="{{ current }}">
-                    <input type="hidden" name="account_ids" value="{{ row['id'] }}">
-                    <label>Nome<input name="name" required minlength="1" maxlength="100"></label>
-                    <label>Valor<input name="value" value="" required maxlength="4096"></label>
-                    <button class="button button-small" type="submit">Adicionar campo</button>
-                  </form>
-                </details>
-                {% endif %}
-              </div>
-            </div>
-          </td>
+        <tr class="detail-row" id="detail-{{ row['id'] }}" hidden data-detail-url="{{ url_for('routes.account_details', account_id=row['id'], service=current) }}">
+          <td colspan="{{ table_colspan }}" data-detail-content></td>
         </tr>
       {% endfor %}
       <tr class="no-results" hidden><td colspan="{{ table_colspan }}"><p class="empty-state">Nenhuma conta corresponde ao filtro.</p></td></tr>
       </tbody>
     </table>
   </div>
+  <nav class="pagination" aria-label="Paginação de contas">
+    {% if has_prev %}<a class="button button-small button-quiet" rel="prev" href="{{ url_for('routes.index', service=current, cursor=prev_cursor, **view_params) }}">Anterior</a>{% endif %}
+    <span class="muted" data-page-count>Mostrando {{ page_count }} conta(s) nesta página</span>
+    {% if has_next %}<a class="button button-small button-quiet" rel="next" href="{{ url_for('routes.index', service=current, cursor=next_cursor, **view_params) }}">Próxima</a>{% endif %}
+  </nav>
   {% else %}<div class="empty-wrap"><p class="empty-state">Nenhuma conta cadastrada neste serviço ainda. Use “Adicionar conta” acima para começar.</p></div>{% endif %}
 </section>
 

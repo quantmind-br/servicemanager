@@ -12,23 +12,24 @@
   <p class="empty-state">Você não possui acesso a nenhum serviço. Solicite a um administrador.</p>
 </section>
 {% else %}
-<div class="coverage-controls">
+<form id="coverage-form" method="get" action="{{ url_for('routes.coverage') }}" class="coverage-controls">
   <label>Exibir
-    <select id="coverage-filter">
+    <select id="coverage-filter" name="filter">
       <option value="">Todas</option>
-      <option value="none-registered">Não cadastrada em nenhum serviço</option>
-      <option value="multi-active">Ativa em mais de um serviço</option>
-      <option value="missing-registration">Falta cadastro em serviço selecionado</option>
+      <option value="none-registered"{% if filter_mode == 'none-registered' %} selected{% endif %}>Não cadastrada em nenhum serviço</option>
+      <option value="multi-active"{% if filter_mode == 'multi-active' %} selected{% endif %}>Ativa em mais de um serviço</option>
+      <option value="missing-registration"{% if filter_mode == 'missing-registration' %} selected{% endif %}>Falta cadastro em serviço selecionado</option>
     </select>
   </label>
-  <fieldset class="coverage-service-filter" hidden>
+  <fieldset class="coverage-service-filter"{% if filter_mode != 'missing-registration' %} hidden{% endif %}>
     <legend class="muted">Serviços selecionados</legend>
     {% for service in services %}
-    <label class="coverage-service-label"><input type="checkbox" data-coverage-service value="{{ service['id'] }}" checked>{{ service['name'] }}</label>
+    <label class="coverage-service-label"><input type="checkbox" name="services" data-coverage-service value="{{ service['id'] }}"{% if filter_mode != 'missing-registration' or service['id'] in selected_services %} checked{% endif %}>{{ service['name'] }}</label>
     {% endfor %}
   </fieldset>
-  <span id="coverage-count" class="muted" aria-live="polite"></span>
-</div>
+  <button type="submit" class="button button-small">Aplicar</button>
+  <span id="coverage-count" class="muted" aria-live="polite">{{ total_count }} conta(s) no total · mostrando {{ page_count }} nesta página</span>
+</form>
 
 <section class="panel accounts-panel">
   <div class="table-wrap coverage-wrap">
@@ -37,23 +38,28 @@
       <tbody>
         {% for account in accounts %}
         {% set agg = aggregates[account['id']] %}
-        <tr data-coverage-row data-reg-count="{{ agg.registered_count }}" data-active-count="{{ agg.active_count }}"{% for service in services %} data-reg-svc-{{ service['id'] }}="{{ '1' if cells.get((account['id'], service['id'])) and cells.get((account['id'], service['id']))['registered'] else '0' }}"{% endfor %}>
+        <tr data-coverage-row data-reg-count="{{ agg['registered_count'] }}" data-active-count="{{ agg['active_count'] }}"{% for service in services %}{% set link = links_by_account.get((account['id'], service['id'])) %} data-reg-svc-{{ service['id'] }}="{{ '1' if link and link['registered'] else '0' }}"{% endfor %}>
           <th scope="row" class="coverage-email">{{ account['email'] }}</th>
           {% for service in services %}
-          {% set cell = cells.get((account['id'], service['id'])) %}
+          {% set link = links_by_account.get((account['id'], service['id'])) %}
+          {% set status = link['status'] if link else 'nunca' %}
+          {% set registered = link and link['registered'] %}
           <td>
-            {% if cell %}
-            <a href="{{ url_for('routes.index', service=service['id']) }}#row-{{ account['id'] }}" class="cov cov-{{ cell['status'] }}{% if cell['registered'] %} cov-reg{% endif %}" title="{{ service['name'] }}: {{ labels[cell['status']] }}{{ ', cadastrada' if cell['registered'] }}">{{ 'A' if cell['status'] == 'ativo' else ('I' if cell['status'] == 'inativo' else '·') }}</a>
-            {% else %}<span class="cov cov-missing" title="Sem vínculo">—</span>{% endif %}
+            <a href="{{ url_for('routes.index', service=service['id']) }}#row-{{ account['id'] }}" class="cov cov-{{ status }}{% if registered %} cov-reg{% endif %}" title="{{ service['name'] }}: {{ labels[status] }}{{ ', cadastrada' if registered }}">{{ 'A' if status == 'ativo' else ('I' if status == 'inativo' else '·') }}</a>
           </td>
           {% endfor %}
         </tr>
         {% else %}
-        <tr><td colspan="{{ services|length + 1 }}"><p class="empty-state">Nenhuma conta cadastrada.</p></td></tr>
+        <tr><td colspan="{{ services|length + 1 }}"><p class="empty-state">Nenhuma conta corresponde ao filtro.</p></td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+  <nav class="pagination" aria-label="Paginação de contas">
+    {% if has_prev %}<a class="button button-small button-quiet" rel="prev" href="{{ url_for('routes.coverage', cursor=prev_cursor, **view_params) }}">Anterior</a>{% endif %}
+    <span class="muted">Mostrando {{ page_count }} de {{ total_count }} conta(s)</span>
+    {% if has_next %}<a class="button button-small button-quiet" rel="next" href="{{ url_for('routes.coverage', cursor=next_cursor, **view_params) }}">Próxima</a>{% endif %}
+  </nav>
 </section>
 {% endif %}
 {% endblock %}

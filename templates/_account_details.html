@@ -1,0 +1,58 @@
+{% from "_macros.html" import copy_value, copy_input %}
+<div class="detail-body">
+  <div class="fields-block">
+    <h3>Campos adicionais</h3>
+    {% if fields %}
+    <div class="table-wrap">
+      <table class="additional-fields">
+        <thead><tr><th scope="col">Campo</th><th scope="col">Valor</th><th scope="col">Ações</th></tr></thead>
+        <tbody>
+          {% for field in fields %}
+          {% set value_input_id = "field-" ~ field['field_id'] ~ "-" ~ account_id %}
+          <tr>
+            <td class="field-name-cell"><span class="field-name">{{ field['name'] }}</span>{{ copy_value("nome do campo", field['name']) }}</td>
+            <td class="field-value-cell">
+              {% if capabilities['edit'] %}
+              <form class="compact-form field-value-form" method="post" action="{{ url_for('routes.field_update', field_id=field['field_id'], account_id=account_id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="service_id" value="{{ current }}">
+                <input id="{{ value_input_id }}" name="value" value="{{ field['value'] }}" maxlength="4096" aria-label="Valor de {{ field['name'] }}">
+                {{ copy_input("valor do campo", value_input_id) }}
+                <button class="button button-small button-quiet" type="submit">Salvar</button>
+              </form>
+              {% else %}
+              <input id="{{ value_input_id }}" value="{{ field['value'] }}" readonly aria-label="Valor de {{ field['name'] }}">
+              {{ copy_input("valor do campo", value_input_id) }}
+              {% endif %}
+            </td>
+            <td class="field-actions-cell">
+              {% if capabilities['delete'] %}
+              <form class="inline-form" method="post" action="{{ url_for('routes.field_delete', field_id=field['field_id'], account_id=account_id) }}" data-confirm="Excluir este campo desta conta?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="service_id" value="{{ current }}">
+                <button class="button button-small button-danger" type="submit">Excluir</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}<p class="muted-hint">Nenhum campo adicional.</p>{% endif %}
+
+    {% if capabilities['edit'] %}
+    <details class="field-addition">
+      <summary>Adicionar campo</summary>
+      <form class="compact-form" method="post" action="{{ url_for('routes.field_add') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="service_id" value="{{ current }}">
+        <input type="hidden" name="account_ids" value="{{ account_id }}">
+        <label>Nome<input name="name" required minlength="1" maxlength="100"></label>
+        <label>Valor<input name="value" value="" required maxlength="4096"></label>
+        <button class="button button-small" type="submit">Adicionar campo</button>
+      </form>
+    </details>
+    {% endif %}
+  </div>
+</div>

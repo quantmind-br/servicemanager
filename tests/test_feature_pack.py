@@ -4,9 +4,11 @@ import base64
 import csv
 import io
 import json
+import html
 from pathlib import Path
 import re
 import sys
+import tempfile
 import time
 
 from openpyxl import load_workbook
@@ -18,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import create_app
 from service_manager.db import get_db, inserted_id, transaction
 from service_manager.audit import append_audit_event
+import service_manager.routes
 from service_manager.crypto import account_field_aad, account_password_aad, encrypt_secret
 
 
@@ -557,12 +560,31 @@ def test_bulk_status_updates_accounts_and_audits(app, client):
         assert '"count":2' in event["metadata_json"]
 
 
+def test_bulk_registered_updates_accounts_and_audits(app, client):
+    login_admin(client)
+    service_id, account_ids, _ = seed_bulk_data(app)
+
+    response = client.post("/accounts/bulk/registered", data={"service_id": service_id, "account_ids": account_ids, "registered": "1"})
+
+    assert response.status_code == 302
+    assert "ok=bulk_updated" in response.headers["Location"]
+    with app.app_context():
+        conn = get_db()
+        assert [row["registered"] for row in conn.execute("SELECT registered FROM account_service WHERE service_id=? ORDER BY account_id", (service_id,))] == [1, 1]
+        event = conn.execute("SELECT metadata_json FROM audit_events WHERE action='accounts.bulk_registered' ORDER BY id DESC LIMIT 1").fetchone()
+        assert json.loads(event["metadata_json"]) == {"count": 2, "registered": 1}
+
+
 def test_bulk_rejects_foreign_account_and_over_limit(app, client):
     login_admin(client)
     service_id, _, foreign_id = seed_bulk_data(app)
 
     assert client.post("/accounts/bulk/status", data={"service_id": service_id, "account_ids": [foreign_id], "status": "ativo"}).status_code == 404
     assert client.post("/accounts/bulk/status", data={"service_id": service_id, "account_ids": list(range(1, 202)), "status": "ativo"}).status_code == 400
+    with app.app_context():
+        conn = get_db()
+        assert conn.execute("SELECT COUNT(*) FROM audit_events WHERE action='authorization.failed'").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM webhook_deliveries WHERE event_type='authorization_failure'").fetchone()[0] == 0
 
 
 def test_bulk_delete_requires_admin_and_removes_accounts(app, client):
@@ -596,6 +618,43 @@ def test_bulk_delete_requires_matching_confirmation_count(app, client):
         conn = get_db()
         assert conn.execute("SELECT COUNT(*) FROM accounts WHERE id IN (?, ?)", account_ids).fetchone()[0] == 2
         assert conn.execute("SELECT COUNT(*) FROM audit_events WHERE action='accounts.bulk_deleted'").fetchone()[0] == 0
+
+
+def test_bulk_delete_all_linked_denial_uses_first_failing_account_without_mutation(app, client):
+    login_operator(app, client)
+    with app.app_context():
+        conn = get_db()
+        user_id = conn.execute("SELECT id FROM users WHERE username='operator'").fetchone()["id"]
+        service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Init')"))
+        extra_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Extra')"))
+        conn.execute(
+            "INSERT INTO service_members (user_id, service_id, role, created_at) VALUES (?, ?, 'service_admin', '2026-01-01T00:00:00+00:00')",
+            (user_id, service_id),
+        )
+        conn.execute(
+            "INSERT INTO service_members (user_id, service_id, role, created_at) VALUES (?, ?, 'viewer', '2026-01-01T00:00:00+00:00')",
+            (user_id, extra_id),
+        )
+        first = inserted_id(conn.execute("INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES ('first@example.test', ?, ?, 1)", (b"x", b"0" * 12)))
+        second = inserted_id(conn.execute("INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES ('second@example.test', ?, ?, 1)", (b"x", b"0" * 12)))
+        conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (first, service_id))
+        conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (second, service_id))
+        conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (second, extra_id))
+        conn.commit()
+
+    response = client.post("/accounts/bulk/delete", data={"service_id": service_id, "account_ids": [first, second], "confirmation_count": "2"})
+
+    assert response.status_code == 403
+    with app.app_context():
+        conn = get_db()
+        assert conn.execute("SELECT COUNT(*) FROM accounts WHERE id IN (?, ?)", (first, second)).fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM audit_events WHERE action='accounts.bulk_deleted'").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM webhook_deliveries WHERE event_type='destructive_admin_action'").fetchone()[0] == 0
+        rows = conn.execute("SELECT target_type, target_id, metadata_json FROM audit_events WHERE action='authorization.failed'").fetchall()
+        assert len(rows) == 1
+        assert rows[0]["target_type"] == "account"
+        assert rows[0]["target_id"] == str(second)
+        assert json.loads(rows[0]["metadata_json"])["service_id"] == service_id
 
 
 def test_bulk_field_encrypts_value_on_selected_accounts(app, client):
@@ -667,16 +726,19 @@ def test_bulk_field_add_creates_empty_fields_for_individual_fill(app, client):
         assert ('"count":2' in event["metadata_json"]) or ('"count": 2' in event["metadata_json"])
         assert ('"created_count":2' in event["metadata_json"]) or ('"created_count": 2' in event["metadata_json"])
 
-    body = client.get(f"/?service={service_id}").get_data(as_text=True)
-    assert body.count("Identificador externo") >= 2
-    assert body.count('name="value" value=""') >= 2
+    for account_id in account_ids:
+        detail = client.get(f"/accounts/{account_id}/details?service={service_id}")
+        assert detail.status_code == 200
+        assert detail.headers["Cache-Control"] == "no-store, private"
+        fragment = detail.get_data(as_text=True)
+        assert "Identificador externo" in fragment
+        assert 'name="value" value=""' in fragment
 
     lower, higher = sorted(account_ids)
     assert client.post(f"/field/update/{field_id}/{lower}", data={"service_id": service_id, "value": "ABC"}).status_code == 302
     assert client.post(f"/field/update/{field_id}/{higher}", data={"service_id": service_id, "value": "XYZ"}).status_code == 302
-    filled = client.get(f"/?service={service_id}").get_data(as_text=True)
-    assert 'value="ABC"' in filled
-    assert 'value="XYZ"' in filled
+    assert 'value="ABC"' in client.get(f"/accounts/{lower}/details?service={service_id}").get_data(as_text=True)
+    assert 'value="XYZ"' in client.get(f"/accounts/{higher}/details?service={service_id}").get_data(as_text=True)
 
 
 def test_bulk_field_add_reuses_field_and_preserves_filled_values(app, client):
@@ -780,6 +842,11 @@ def test_bulk_field_add_requires_editor_role(app, client):
         assert conn.execute("SELECT COUNT(*) FROM custom_fields WHERE service_id=?", (service_id,)).fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM field_values").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM audit_events WHERE action='accounts.bulk_field_created'").fetchone()[0] == 0
+        rows = conn.execute("SELECT target_type, target_id FROM audit_events WHERE action='authorization.failed'").fetchall()
+        assert len(rows) == 1
+        assert rows[0]["target_type"] == "service"
+        assert rows[0]["target_id"] == str(service_id)
+
 
 def test_audit_view_filters_exports_and_requires_admin(app, client):
     login_admin(client)
@@ -800,6 +867,10 @@ def test_audit_view_filters_exports_and_requires_admin(app, client):
 
     exported = client.get("/admin/audit.csv?action=accounts.bulk_status")
     assert exported.status_code == 200
+    assert exported.mimetype == "text/csv"
+    assert exported.headers["Cache-Control"] == "no-store, private"
+    assert exported.headers["Pragma"] == "no-cache"
+    assert re.search(r"filename=auditoria_\d{8}T\d{6}Z\.csv", exported.headers["Content-Disposition"])
     assert exported.get_data(as_text=True).startswith("\ufeffid,occurred_at,usuario,action,target_type,target_id,metadata_json,source_ip")
 
     client.post("/logout")
@@ -985,6 +1056,97 @@ def test_coverage_emits_full_case_matrix_data(app, client):
 
     multi_tag = row_tag("multi@example.test")
     assert 'data-active-count="2"' in multi_tag
+
+    # Absent links render the default clickable "nunca" dot rather than a dead
+    # cell: every pair links to its service and the missing-cell branch is gone.
+    assert f'href="/?service={beta}#row-{nolink}"' in body
+    assert "cov-missing" not in body
+    assert "Sem vínculo" not in body
+
+
+def test_coverage_paginates_and_bounds_page_to_100(app, client):
+    login_admin(client)
+    with app.app_context():
+        conn = get_db()
+        svc = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Paged')"))
+        for i in range(101):
+            account_id = inserted_id(conn.execute(
+                "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
+                (f"user{i:03d}@example.test", b"x", b"0" * 12),
+            ))
+            conn.execute(
+                "INSERT INTO account_service (account_id, service_id, status, registered) VALUES (?, ?, 'ativo', 1)",
+                (account_id, svc),
+            )
+        conn.commit()
+
+    first = client.get("/coverage").get_data(as_text=True)
+    assert first.count("data-coverage-row") == 100
+    assert "101 conta(s) no total" in first
+    assert 'data-active-count="1"' in first
+    match = re.search(r'rel="next" href="([^"]+)"', first)
+    assert match, "next-page cursor link missing"
+    next_url = html.unescape(match.group(1))
+
+    second = client.get(next_url).get_data(as_text=True)
+    assert second.count("data-coverage-row") == 1
+
+    def page_emails(body: str) -> set[str]:
+        return set(re.findall(r'<th scope="row" class="coverage-email">([^<]+)</th>', body))
+
+    first_emails = page_emails(first)
+    second_emails = page_emails(second)
+    assert len(first_emails) == 100
+    assert first_emails.isdisjoint(second_emails)
+    assert first_emails | second_emails == {f"user{i:03d}@example.test" for i in range(101)}
+
+    # The cursor is bound to its filter; replaying it under a different filter is rejected.
+    assert client.get(next_url + "&filter=none-registered").status_code == 400
+
+
+def test_coverage_server_side_filters_apply_to_full_set(app, client):
+    login_admin(client)
+    with app.app_context():
+        conn = get_db()
+        alpha = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Alpha')"))
+        beta = inserted_id(conn.execute("INSERT INTO services (name) VALUES ('Beta')"))
+
+        def make(email: str) -> int:
+            return inserted_id(conn.execute(
+                "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
+                (email, b"x", b"0" * 12),
+            ))
+
+        def link(account_id: int, service_id: int, status: str, registered: int) -> None:
+            conn.execute(
+                "INSERT INTO account_service (account_id, service_id, status, registered) VALUES (?, ?, ?, ?)",
+                (account_id, service_id, status, registered),
+            )
+
+        full = make("full@example.test"); link(full, alpha, "ativo", 1); link(full, beta, "ativo", 1)
+        gap = make("gap@example.test"); link(gap, alpha, "ativo", 1); link(gap, beta, "nunca", 0)
+        nolink = make("nolink@example.test"); link(nolink, alpha, "ativo", 1)
+        nonereg = make("nonereg@example.test"); link(nonereg, alpha, "nunca", 0); link(nonereg, beta, "inativo", 0)
+        multi = make("multi@example.test"); link(multi, alpha, "ativo", 1); link(multi, beta, "ativo", 1)
+        conn.commit()
+
+    everyone = {"full@example.test", "gap@example.test", "nolink@example.test", "nonereg@example.test", "multi@example.test"}
+
+    def page_emails(url: str) -> set[str]:
+        body = client.get(url).get_data(as_text=True)
+        assert "conta(s) no total" in body
+        return set(re.findall(r'<th scope="row" class="coverage-email">([^<]+)</th>', body))
+
+    assert page_emails("/coverage") == everyone
+    assert page_emails("/coverage?filter=none-registered") == {"nonereg@example.test"}
+    assert page_emails("/coverage?filter=multi-active") == {"full@example.test", "multi@example.test"}
+    assert page_emails(f"/coverage?filter=missing-registration&services={alpha}") == {"nonereg@example.test"}
+    assert page_emails(f"/coverage?filter=missing-registration&services={beta}") == {"gap@example.test", "nolink@example.test", "nonereg@example.test"}
+    assert page_emails(f"/coverage?filter=missing-registration&services={alpha}&services={beta}") == {"gap@example.test", "nolink@example.test", "nonereg@example.test"}
+    # Empty selected-service set shows all accounts (PRD show-all contract).
+    assert page_emails("/coverage?filter=missing-registration") == everyone
+    # Inaccessible or malformed service IDs are ignored: never widening scope, never 500ing.
+    assert page_emails("/coverage?filter=missing-registration&services=999999&services=%C2%B2") == everyone
 
 
 def test_coverage_matrix_requires_authentication(client):
@@ -1365,3 +1527,168 @@ def test_settings_operator_post_is_forbidden(app, client):
     assert client.post("/admin/settings", data={"rotation_enabled": "1"}).status_code == 403
     with app.app_context():
         assert get_db().execute("SELECT COUNT(*) FROM app_settings").fetchone()[0] == 0
+
+
+# --------------------------------------------------------------------------
+# Spooled audit CSV export (PERF-006)
+# --------------------------------------------------------------------------
+
+
+def _reauth_session(client) -> None:
+    with client.session_transaction() as session:
+        session["reauthenticated_at"] = time.time()
+
+
+def _append_chained(app, events: list[dict]) -> list[int]:
+    ids: list[int] = []
+    with app.app_context():
+        conn = get_db()
+        with transaction(conn):
+            for event in events:
+                ids.append(append_audit_event(conn, **event))
+    return ids
+
+
+_AUDIT_HEADER = [
+    "id", "occurred_at", "usuario", "action", "target_type", "target_id",
+    "metadata_json", "source_ip", "previous_hash", "event_hash",
+]
+
+
+def test_audit_csv_iterates_cursor_without_fetchall(app, client, monkeypatch):
+    login_admin(client)
+    _reauth_session(client)
+    _append_chained(app, [{"action": "cursor.probe", "target_type": "svc", "target_id": "7", "source_ip": "10.0.0.1"}])
+
+    real_get_db = service_manager.routes.get_db
+
+    class _CursorProxy:
+        def __init__(self, cursor):
+            self._cursor = cursor
+
+        def __iter__(self):
+            return iter(self._cursor)
+
+        def fetchall(self):
+            raise AssertionError("audit export must not call fetchall()")
+
+        def __getattr__(self, name):
+            return getattr(self._cursor, name)
+
+    class _ConnProxy:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, statement, params=()):
+            cursor = self._conn.execute(statement, params)
+            return _CursorProxy(cursor) if "FROM audit_events" in statement else cursor
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    monkeypatch.setattr("service_manager.routes.get_db", lambda: _ConnProxy(real_get_db()))
+
+    response = client.get("/admin/audit.csv?action=cursor.probe")
+    assert response.status_code == 200
+    reader = list(csv.reader(io.StringIO(response.get_data(as_text=True).lstrip("\ufeff"))))
+    assert reader[0] == _AUDIT_HEADER
+    assert len(reader) == 2
+    row = reader[1]
+    assert row[3] == "cursor.probe"
+    assert row[4] == "svc"
+    assert row[5] == "7"
+    assert row[7] == "10.0.0.1"
+
+
+def test_audit_csv_sanitizes_formula_leading_cells(app, client):
+    login_admin(client)
+    _reauth_session(client)
+    ids = _append_chained(app, [
+        {"action": "=formula-action", "target_type": "svc", "target_id": "1", "source_ip": "10.0.0.1"},
+        {"action": "act", "target_type": "+formula-target", "target_id": "2", "source_ip": "10.0.0.2"},
+        {"action": "act", "target_type": "svc", "target_id": "-formula-id", "source_ip": "10.0.0.3"},
+        {"action": "act", "target_type": "svc", "target_id": "4", "source_ip": "@formula-ip"},
+    ])
+    text = client.get("/admin/audit.csv").get_data(as_text=True).lstrip("\ufeff")
+    rows = {r[0]: r for r in csv.reader(io.StringIO(text))}
+    assert rows[str(ids[0])][3] == "'=formula-action"
+    assert rows[str(ids[1])][4] == "'+formula-target"
+    assert rows[str(ids[2])][5] == "'-formula-id"
+    assert rows[str(ids[3])][7] == "'@formula-ip"
+
+
+def test_audit_csv_rollover_preserves_output_and_closes_on_response_close(app, client, monkeypatch):
+    login_admin(client)
+    _reauth_session(client)
+    _append_chained(app, [
+        {"action": "roll.probe", "target_type": "svc", "target_id": str(i), "source_ip": "10.0.0.1"}
+        for i in range(5)
+    ])
+    baseline = client.get("/admin/audit.csv?action=roll.probe").get_data()
+
+    real_ctor = tempfile.SpooledTemporaryFile
+    captured: dict = {}
+
+    def factory(*args, max_size=0, **kwargs):
+        captured["max_size"] = max_size
+        spool = real_ctor(max_size=1)
+        captured["spool"] = spool
+        return spool
+
+    monkeypatch.setattr("service_manager.routes.tempfile.SpooledTemporaryFile", factory)
+    response = client.get("/admin/audit.csv?action=roll.probe", buffered=False)
+    body = response.get_data()
+    assert captured["max_size"] == 8 * 1024 * 1024
+    assert captured["spool"]._rolled is True
+    assert body == baseline
+    assert not captured["spool"].closed
+    response.close()
+    assert captured["spool"].closed
+
+
+def test_audit_csv_closes_spool_when_send_file_fails(app, client, monkeypatch):
+    login_admin(client)
+    _reauth_session(client)
+    _append_chained(app, [{"action": "fail.probe", "target_type": "svc", "target_id": "1", "source_ip": "10.0.0.1"}])
+
+    real_ctor = tempfile.SpooledTemporaryFile
+    captured: dict = {}
+
+    def factory(*args, max_size=0, **kwargs):
+        spool = real_ctor(max_size=max_size)
+        captured["spool"] = spool
+        return spool
+
+    monkeypatch.setattr("service_manager.routes.tempfile.SpooledTemporaryFile", factory)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("send_file failed")
+
+    monkeypatch.setattr("service_manager.routes.send_file", boom)
+    response = client.get("/admin/audit.csv?action=fail.probe")
+    assert response.status_code == 500
+    assert captured["spool"].closed
+
+
+def test_audit_csv_limits_export_to_ten_thousand_rows(app, client):
+    login_admin(client)
+    _reauth_session(client)
+    placeholder = bytes(32)
+    rows = [
+        ("2026-01-01T00:00:00Z", "limit.probe", "svc", str(i), "10.0.0.1", placeholder, placeholder)
+        for i in range(10001)
+    ]
+    with app.app_context():
+        conn = get_db()
+        with transaction(conn):
+            conn.executemany(
+                "INSERT INTO audit_events (occurred_at, action, target_type, target_id, source_ip, previous_hash, event_hash) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+    text = client.get("/admin/audit.csv?action=limit.probe").get_data(as_text=True).lstrip("\ufeff")
+    data = list(csv.reader(io.StringIO(text)))[1:]
+    assert len(data) == 10000
+    assert data[0][5] == "10000"
+    assert data[1][5] == "9999"
+    assert data[-1][5] == "1"

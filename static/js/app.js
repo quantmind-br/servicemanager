@@ -75,15 +75,11 @@
     }
   };
 
-  document.querySelectorAll("[data-copy-value]").forEach((button) => {
-    button.addEventListener("click", () => copyText(button, button.dataset.copyValue || ""));
-  });
-  document.querySelectorAll("[data-copy-input]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const input = document.getElementById(button.dataset.copyInput);
-      copyText(button, input ? input.value : "");
-    });
-  });
+  const copyValueControl = (button) => copyText(button, button.dataset.copyValue || "");
+  const copyInputControl = (button) => {
+    const input = document.getElementById(button.dataset.copyInput);
+    copyText(button, input ? input.value : "");
+  };
 
   // ===== Password reveal: per-cell state. Each secret cell owns its own
   // AbortController + timer so multiple rows never share a singleton panel.
@@ -132,60 +128,56 @@
     return { controller, value: payload.value, expiresIn: payload.expires_in };
   };
 
-  document.querySelectorAll("[data-secret-show]").forEach((button) => {
+  const handleSecretShow = async (button) => {
     const cell = button.closest("[data-secret-cell]");
     if (!cell) return;
-    button.addEventListener("click", async () => {
-      if (secretState.has(cell) && secretState.get(cell).revealed) {
-        restoreMask(cell);
-        return;
-      }
-      button.disabled = true;
-      button.classList.add("is-loading");
-      try {
-        const { controller, value, expiresIn } = await fetchSecret(cell);
-        if (controller.signal.aborted || document.hidden) return;
-        const mask = cell.querySelector("[data-secret-mask]");
-        if (mask) mask.textContent = value;
-        button.classList.remove("is-loading");
-        button.classList.add("is-revealed");
-        button.setAttribute("aria-label", "Ocultar senha");
-        button.setAttribute("title", "Ocultar senha");
-        const timer = window.setTimeout(() => restoreMask(cell), Math.min(expiresIn, 30) * 1000 || 30000);
-        const warnTimer = window.setTimeout(() => { const m = cell.querySelector("[data-secret-mask]"); if (m) m.classList.add("is-expiring"); }, Math.max((Math.min(expiresIn, 30) - 5) * 1000, 0));
-        secretState.set(cell, { controller, timer, warnTimer, revealed: true });
-      } catch (error) {
-        if (error?.name === "AbortError") return;
-        restoreMask(cell);
-        showToast(error?.status === 429 ? "Limite de revelações atingido. Aguarde alguns minutos." : "Não foi possível exibir a senha.");
-      } finally {
-        button.classList.remove("is-loading");
-        button.disabled = false;
-      }
-    });
-  });
+    if (secretState.has(cell) && secretState.get(cell).revealed) {
+      restoreMask(cell);
+      return;
+    }
+    button.disabled = true;
+    button.classList.add("is-loading");
+    try {
+      const { controller, value, expiresIn } = await fetchSecret(cell);
+      if (controller.signal.aborted || document.hidden) return;
+      const mask = cell.querySelector("[data-secret-mask]");
+      if (mask) mask.textContent = value;
+      button.classList.remove("is-loading");
+      button.classList.add("is-revealed");
+      button.setAttribute("aria-label", "Ocultar senha");
+      button.setAttribute("title", "Ocultar senha");
+      const timer = window.setTimeout(() => restoreMask(cell), Math.min(expiresIn, 30) * 1000 || 30000);
+      const warnTimer = window.setTimeout(() => { const m = cell.querySelector("[data-secret-mask]"); if (m) m.classList.add("is-expiring"); }, Math.max((Math.min(expiresIn, 30) - 5) * 1000, 0));
+      secretState.set(cell, { controller, timer, warnTimer, revealed: true });
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+      restoreMask(cell);
+      showToast(error?.status === 429 ? "Limite de revelações atingido. Aguarde alguns minutos." : "Não foi possível exibir a senha.");
+    } finally {
+      button.classList.remove("is-loading");
+      button.disabled = false;
+    }
+  };
 
-  document.querySelectorAll("[data-secret-copy]").forEach((button) => {
+  const handleSecretCopy = async (button) => {
     const cell = button.closest("[data-secret-cell]");
     if (!cell) return;
-    button.addEventListener("click", async () => {
-      let ownController = null;
-      try {
-        const result = await fetchSecret(cell);
-        ownController = result.controller;
-        if (ownController.signal.aborted) return;
-        let value = result.value;
-        await navigator.clipboard.writeText(value);
-        value = "";
-        if (secretState.get(cell)?.controller === ownController) restoreMask(cell);
-        flashCopyFeedback(button, "Copiado");
-      } catch (error) {
-        if (error?.name === "AbortError") return;
-        if (!ownController || secretState.get(cell)?.controller === ownController) restoreMask(cell);
-        showToast(error?.status === 429 ? "Limite de revelações atingido. Aguarde alguns minutos." : "Não foi possível copiar.")
-      }
-    });
-  });
+    let ownController = null;
+    try {
+      const result = await fetchSecret(cell);
+      ownController = result.controller;
+      if (ownController.signal.aborted) return;
+      let value = result.value;
+      await navigator.clipboard.writeText(value);
+      value = "";
+      if (secretState.get(cell)?.controller === ownController) restoreMask(cell);
+      flashCopyFeedback(button, "Copiado");
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+      if (!ownController || secretState.get(cell)?.controller === ownController) restoreMask(cell);
+      showToast(error?.status === 429 ? "Limite de revelações atingido. Aguarde alguns minutos." : "Não foi possível copiar.")
+    }
+  };
 
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) restoreAllMasks();
@@ -310,17 +302,16 @@
     editForm.email.value = "";
     editForm.password.value = "";
   };
+  const handleEditAccount = (button) => {
+    if (!editDialog || !editForm) return;
+    editForm.setAttribute("action", button.dataset.updateUrl);
+    editForm.email.value = button.dataset.accountEmail || "";
+    editForm.dataset.initialEmail = button.dataset.accountEmail || "";
+    editForm.password.value = "";
+    syncCsrfFields(editForm);
+    editDialog.showModal();
+  };
   if (editDialog && editForm) {
-    document.querySelectorAll("[data-edit-account]").forEach((button) => {
-      button.addEventListener("click", () => {
-        editForm.setAttribute("action", button.dataset.updateUrl);
-        editForm.email.value = button.dataset.accountEmail || "";
-        editForm.dataset.initialEmail = button.dataset.accountEmail || "";
-        editForm.password.value = "";
-        syncCsrfFields(editForm);
-        editDialog.showModal();
-      });
-    });
     const requestCloseEditDialog = () => {
       const dirty =
         editForm.email.value !== (editForm.dataset.initialEmail || "") ||
@@ -358,9 +349,15 @@
     });
   };
 
+  // Self-managed forms attach their own submit listeners (preventDefault +
+  // stopPropagation); the global capture handler must defer to them so their
+  // behavior is unchanged, while confirmation + submit locking apply at capture
+  // phase to ordinary forms — including forms in lazily inserted detail fragments.
+  const SELF_MANAGED_FORMS = '[data-async-form], [data-no-submit-lock], [data-admin-create], [data-webhook-create], [data-webhook-edit], [data-webhook-test], [data-webhook-delete], form[action$="/reauth"]';
   document.addEventListener("submit", (event) => {
     const form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
+    if (form.matches(SELF_MANAGED_FORMS)) return;
     if (form.dataset.confirm && form.dataset.confirmed !== "1") {
       event.preventDefault();
       askConfirm(form.dataset.confirm).then((ok) => {
@@ -371,7 +368,6 @@
       return;
     }
     delete form.dataset.confirmed;
-    if (form.hasAttribute("data-no-submit-lock")) return;
     if (form.dataset.submitting) { event.preventDefault(); return; }
     form.dataset.submitting = "1";
     const button = form.querySelector('button[type="submit"]');
@@ -380,7 +376,7 @@
       button.disabled = true;
       button.textContent = "Enviando…";
     }
-  });
+  }, true);
   window.addEventListener("pageshow", () => {
     document.querySelectorAll("form[data-submitting]").forEach((form) => {
       delete form.dataset.submitting;
@@ -420,155 +416,63 @@
     });
   });
 
-  // ===== Filters: fuzzy text (accent/case-insensitive subsequence over each
-  // row's data-search) AND'd with the Status and Cadastro column selects.
-  const normalize = (text) =>
-    (text || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-
-  const subsequenceMatch = (needle, hay) => {
-    if (!needle) return true;
-    let i = 0;
-    for (let k = 0; k < hay.length && i < needle.length; k++) {
-      if (hay[k] === needle[i]) i++;
-    }
-    return i === needle.length;
-  };
-
-  let refreshFilter = () => {};
-  let refreshStatusLabel = () => {};
+  // ===== Filters and sort drive server-side navigation. Changing a control
+  // reloads with the encoded query so each response stays bounded to 100 rows.
   let refreshBulkSelection = () => {};
   const filterInput = document.getElementById("account-filter");
   const statusFilter = document.getElementById("filter-status");
   const registeredFilter = document.getElementById("filter-registered");
   const rotationFilter = document.getElementById("filter-rotation");
-  const accountsTbody = document.querySelector("table.accounts tbody");
-  let filterUrlTimer = 0;
-  const syncUrlState = () => {
+  const accountsTable = document.querySelector("table.accounts");
+
+  const navigateAccounts = (mutate) => {
     const url = new URL(window.location.href);
-    const values = {
-      q: (filterInput?.value || "").trim(),
-      st: statusFilter?.value || "",
-      reg: registeredFilter?.value || "",
-      rot: rotationFilter?.value || "",
-    };
-    for (const [key, value] of Object.entries(values)) {
-      if (value) url.searchParams.set(key, value);
-      else url.searchParams.delete(key);
-    }
-    const sorted = document.querySelector('th[data-sort-col][aria-sort]:not([aria-sort="none"])');
-    const sortButton = sorted?.querySelector(".th-sort");
-    if (sortButton?.dataset.sort) {
-      url.searchParams.set("sort", sortButton.dataset.sort);
-      url.searchParams.set("dir", sorted.getAttribute("aria-sort") === "descending" ? "desc" : "asc");
-    } else {
-      url.searchParams.delete("sort");
-      url.searchParams.delete("dir");
-    }
-    window.history.replaceState(null, "", url);
+    // Filter/sort changes reset pagination and focus.
+    url.searchParams.delete("cursor");
+    url.searchParams.delete("focus");
+    mutate(url.searchParams);
+    window.location.assign(url.pathname + "?" + url.searchParams.toString());
   };
 
-  if (accountsTbody && (filterInput || statusFilter || registeredFilter || rotationFilter)) {
-    const rowInfo = Array.from(accountsTbody.querySelectorAll("tr[data-row]")).map((tr) => ({
-      tr,
-      search: normalize(tr.dataset.search || ""),
-      statusLabel: normalize(tr.querySelector(".status-badge")?.selectedOptions[0]?.textContent || ""),
-      detail: document.getElementById("detail-" + tr.dataset.id),
-    }));
-    const infoByRow = new Map(rowInfo.map((info) => [info.tr, info]));
-    const noResults = accountsTbody.querySelector("tr.no-results");
-    const applyFilter = (urlDelay = 0) => {
-      const query = normalize((filterInput?.value || "").trim());
-      const status = statusFilter?.value || "";
-      const registered = registeredFilter?.value || "";
-      const rotation = rotationFilter?.value || "";
-      let visible = 0;
-      for (const info of rowInfo) {
-        const haystack = info.search + " " + info.statusLabel;
-        // All active filters combine (AND); rotation is one more predicate.
-        const show =
-          subsequenceMatch(query, haystack) &&
-          (!status || info.tr.dataset.status === status) &&
-          (!registered || info.tr.dataset.registered === registered) &&
-          (!rotation || info.tr.dataset.rotation === rotation);
-        info.tr.hidden = !show;
-        if (!show && info.detail) info.detail.hidden = true;
-        if (show) visible += 1;
-      }
-      if (noResults) noResults.hidden = visible !== 0;
-      const active = Boolean(query || status || registered || rotation);
-      const countEl = document.getElementById("filter-count");
-      if (countEl) countEl.textContent = active ? `Exibindo ${visible} de ${rowInfo.length} contas` : "";
-      const clearButton = document.getElementById("filter-clear");
-      if (clearButton) clearButton.hidden = !active;
-      refreshBulkSelection();
-      window.clearTimeout(filterUrlTimer);
-      filterUrlTimer = window.setTimeout(syncUrlState, urlDelay);
-    };
-    refreshFilter = applyFilter;
-    refreshStatusLabel = (tr) => {
-      const info = infoByRow.get(tr);
-      if (info) info.statusLabel = normalize(tr.querySelector(".status-badge")?.selectedOptions[0]?.textContent || "");
-    };
-    filterInput?.addEventListener("input", () => applyFilter(300));
-    statusFilter?.addEventListener("change", () => applyFilter());
-    registeredFilter?.addEventListener("change", () => applyFilter());
-    rotationFilter?.addEventListener("change", () => applyFilter());
-    document.getElementById("filter-clear")?.addEventListener("click", () => {
-      if (filterInput) filterInput.value = "";
-      if (statusFilter) statusFilter.value = "";
-      if (registeredFilter) registeredFilter.value = "";
-      if (rotationFilter) rotationFilter.value = "";
-      applyFilter();
+  const applyAccountFilters = (params) => {
+    const set = (key, value) => { if (value) params.set(key, value); else params.delete(key); };
+    set("q", (filterInput?.value || "").trim());
+    set("st", statusFilter?.value || "");
+    set("reg", registeredFilter?.value || "");
+    set("rot", rotationFilter?.value || "");
+  };
+
+  if (accountsTable && (filterInput || statusFilter || registeredFilter || rotationFilter)) {
+    let filterNavTimer = 0;
+    filterInput?.addEventListener("input", () => {
+      window.clearTimeout(filterNavTimer);
+      filterNavTimer = window.setTimeout(() => navigateAccounts(applyAccountFilters), 400);
     });
-    const initialParams = new URLSearchParams(window.location.search);
-    if (filterInput) filterInput.value = initialParams.get("q") || "";
-    if (statusFilter && Array.from(statusFilter.options).some((option) => option.value === initialParams.get("st"))) statusFilter.value = initialParams.get("st") || "";
-    if (registeredFilter && Array.from(registeredFilter.options).some((option) => option.value === initialParams.get("reg"))) registeredFilter.value = initialParams.get("reg") || "";
-    if (rotationFilter && Array.from(rotationFilter.options).some((option) => option.value === initialParams.get("rot"))) rotationFilter.value = initialParams.get("rot") || "";
-    applyFilter();
+    filterInput?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") { event.preventDefault(); window.clearTimeout(filterNavTimer); navigateAccounts(applyAccountFilters); }
+    });
+    statusFilter?.addEventListener("change", () => navigateAccounts(applyAccountFilters));
+    registeredFilter?.addEventListener("change", () => navigateAccounts(applyAccountFilters));
+    rotationFilter?.addEventListener("change", () => navigateAccounts(applyAccountFilters));
+    document.getElementById("filter-clear")?.addEventListener("click", () => {
+      navigateAccounts((params) => {
+        for (const key of ["q", "st", "reg", "rot"]) params.delete(key);
+      });
+    });
   }
 
-  const statusRank = { ativo: 0, nunca: 1, inativo: 2 };
-  document.querySelectorAll(".th-sort").forEach((button) => {
+  for (const button of document.querySelectorAll(".th-sort")) {
     button.addEventListener("click", () => {
       const th = button.closest("th");
-      const table = button.closest("table");
-      const tbody = table ? table.querySelector("tbody") : null;
-      if (!th || !tbody) return;
-      const direction = th.getAttribute("aria-sort") === "ascending" ? "descending" : "ascending";
-      table.querySelectorAll("th[data-sort-col]").forEach((other) => {
-        other.setAttribute("aria-sort", other === th ? direction : "none");
+      const dir = th?.getAttribute("aria-sort") === "ascending" ? "desc" : "asc";
+      navigateAccounts((params) => {
+        params.set("sort", button.dataset.sort);
+        params.set("dir", dir);
       });
-      const key = button.dataset.sort;
-      const value = (tr) => key === "status"
-        ? (statusRank[tr.dataset.status] ?? 1)
-        : (tr.querySelector(".email-text")?.textContent || "").toLowerCase();
-      const rows = Array.from(tbody.querySelectorAll("tr[data-row]"));
-      rows.sort((a, b) => {
-        const va = value(a); const vb = value(b);
-        return (va < vb ? -1 : va > vb ? 1 : 0) * (direction === "ascending" ? 1 : -1);
-      });
-      const anchor = tbody.querySelector("tr.no-results");
-      for (const tr of rows) {
-        tbody.insertBefore(tr, anchor);
-        const detail = document.getElementById("detail-" + tr.dataset.id);
-        if (detail) tbody.insertBefore(detail, anchor);
-      }
-      syncUrlState();
     });
-  });
-
-  const initialSortParams = new URLSearchParams(window.location.search);
-  const initialSort = initialSortParams.get("sort");
-  const initialDir = initialSortParams.get("dir");
-  if (["email", "status"].includes(initialSort)) {
-    const button = document.querySelector(`.th-sort[data-sort="${initialSort}"]`);
-    button?.click();
-    if (initialDir === "desc") button?.click();
   }
 
   document.getElementById("share-view")?.addEventListener("click", async () => {
-    syncUrlState();
     try {
       await navigator.clipboard.writeText(window.location.href);
       showToast("Link copiado.", "success");
@@ -603,13 +507,11 @@
   refreshBulkSelection = () => {
     updateBulkUi();
   };
-  rowSelects.forEach((control) => {
-    control.addEventListener("change", () => {
-      if (control.checked) selectedAccountIds.add(control.value);
-      else selectedAccountIds.delete(control.value);
-      updateBulkUi();
-    });
-  });
+  const handleRowSelectChange = (control) => {
+    if (control.checked) selectedAccountIds.add(control.value);
+    else selectedAccountIds.delete(control.value);
+    updateBulkUi();
+  };
   selectVisible?.addEventListener("change", () => {
     for (const control of rowSelects) {
       if (control.closest("tr[data-row]")?.hidden) continue;
@@ -754,26 +656,54 @@
   });
   updateBulkUi();
 
-  // ===== Row expansion: [data-expand] toggles the paired detail row.
-  document.querySelectorAll("[data-expand]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const targetId = button.getAttribute("aria-controls");
-      const target = targetId ? document.getElementById(targetId) : null;
-      if (!target) return;
-      const willOpen = target.hidden;
-      target.hidden = !willOpen;
-      button.setAttribute("aria-expanded", willOpen ? "true" : "false");
-      button.classList.toggle("is-open", willOpen);
-    });
-  });
+  // ===== Row expansion: [data-expand] toggles the paired detail row and
+  // lazily loads its custom-field fragment on first open.
+  const loadDetail = async (detail, container) => {
+    try {
+      const response = await fetch(detail.dataset.detailUrl, {
+        credentials: "same-origin",
+        headers: { "Accept": "text/html" },
+      });
+      if (response.redirected && new URL(response.url).pathname === "/login") {
+        window.location.assign(response.url);
+        return false;
+      }
+      if (!response.ok) throw new Error("detail failed");
+      container.innerHTML = await response.text();
+      detail.dataset.loaded = "1";
+      return true;
+    } catch {
+      showToast("Não foi possível carregar os detalhes.");
+      return false;
+    }
+  };
+  const handleExpand = async (button) => {
+    const targetId = button.getAttribute("aria-controls");
+    const target = targetId ? document.getElementById(targetId) : null;
+    if (!target) return;
+    const willOpen = target.hidden;
+    if (willOpen) {
+      const container = target.querySelector("[data-detail-content]");
+      if (container && target.dataset.detailUrl && !target.dataset.loaded) {
+        button.classList.add("is-loading");
+        const ok = await loadDetail(target, container);
+        button.classList.remove("is-loading");
+        if (!ok) return;
+      }
+    }
+    target.hidden = !willOpen;
+    button.setAttribute("aria-expanded", willOpen ? "true" : "false");
+    button.classList.toggle("is-open", willOpen);
+  };
 
   const rowHash = /^#row-(\d+)$/.exec(window.location.hash);
   if (rowHash) {
     const row = document.getElementById("row-" + rowHash[1]);
     const detail = document.getElementById("detail-" + rowHash[1]);
     const expandButton = row ? row.querySelector("[data-expand]") : null;
-    if (expandButton && detail && detail.hidden) expandButton.click();
-    if (row) row.scrollIntoView({ block: "center" });
+    const scrollToRow = () => { if (row) row.scrollIntoView({ block: "center" }); };
+    if (expandButton && detail && detail.hidden) handleExpand(expandButton).then(scrollToRow);
+    else scrollToRow();
   }
 
   // ===== Auto-submit: [data-autosubmit] controls POST their form on change.
@@ -786,61 +716,85 @@
     if (el) el.textContent = String(Math.max(0, (parseInt(el.textContent, 10) || 0) + delta));
   };
 
-  document.querySelectorAll("[data-autosubmit]").forEach((control) => {
-    control.dataset.prev = controlValue(control);
-    control.addEventListener("change", async () => {
-      const form = control.closest("form");
-      if (!form) return;
-      if (!form.hasAttribute("data-fetch-update")) {
-        if (typeof form.requestSubmit === "function") form.requestSubmit();
-        else form.submit();
+  for (const control of document.querySelectorAll("[data-autosubmit]")) control.dataset.prev = controlValue(control);
+  const handleAutosubmitChange = async (control) => {
+    const form = control.closest("form");
+    if (!form) return;
+    if (!form.hasAttribute("data-fetch-update")) {
+      if (typeof form.requestSubmit === "function") form.requestSubmit();
+      else form.submit();
+      return;
+    }
+    const previous = control.dataset.prev;
+    const value = controlValue(control);
+    const body = new URLSearchParams(new FormData(form));
+    control.disabled = true;
+    try {
+      const response = await fetch(form.action, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRFToken": csrfToken },
+        body,
+      });
+      if (response.redirected && new URL(response.url).pathname === "/login") {
+        window.location.assign(response.url);
         return;
       }
-      const previous = control.dataset.prev;
-      const value = controlValue(control);
-      const body = new URLSearchParams(new FormData(form));
-      control.disabled = true;
-      try {
-        const response = await fetch(form.action, {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "X-CSRFToken": csrfToken },
-          body,
-        });
-        if (response.redirected && new URL(response.url).pathname === "/login") {
-          window.location.assign(response.url);
-          return;
-        }
-        if (!response.ok) throw new Error("update failed");
-        control.dataset.prev = value;
-        const row = form.closest("tr[data-row]");
-        if (control.name === "status" && row) {
-          bumpCount(row.dataset.status, -1);
-          bumpCount(value, 1);
-          row.dataset.status = value;
-          const pill = form.querySelector(".status-pill");
-          if (pill) pill.className = "status-pill status-" + value;
-          const label = control.selectedOptions[0]?.textContent || value;
-          const copyButton = form.querySelector("[data-copy-value]");
-          if (copyButton) copyButton.dataset.copyValue = label;
-          refreshStatusLabel(row);
-          refreshFilter();
-          announceSave("Status salvo.");
-        } else if (control.name === "registered" && row) {
-          row.dataset.registered = value;
-          const copyButton = form.querySelector("[data-copy-value]");
-          if (copyButton) copyButton.dataset.copyValue = value === "1" ? "Cadastrada" : "Não cadastrada";
-          refreshFilter();
-          announceSave("Cadastro salvo.");
-        }
-      } catch {
-        if (control.type === "checkbox") control.checked = previous === "1";
-        else control.value = previous;
-        showToast("Não foi possível salvar. Tente novamente.");
-      } finally {
-        control.disabled = false;
+      if (!response.ok) throw new Error("update failed");
+      control.dataset.prev = value;
+      const row = form.closest("tr[data-row]");
+      if (control.name === "status" && row) {
+        bumpCount(row.dataset.status, -1);
+        bumpCount(value, 1);
+        row.dataset.status = value;
+        const pill = form.querySelector(".status-pill");
+        if (pill) pill.className = "status-pill status-" + value;
+        const label = control.selectedOptions[0]?.textContent || value;
+        const copyButton = form.querySelector("[data-copy-value]");
+        if (copyButton) copyButton.dataset.copyValue = label;
+        announceSave("Status salvo.");
+      } else if (control.name === "registered" && row) {
+        row.dataset.registered = value;
+        const copyButton = form.querySelector("[data-copy-value]");
+        if (copyButton) copyButton.dataset.copyValue = value === "1" ? "Cadastrada" : "Não cadastrada";
+        announceSave("Cadastro salvo.");
       }
-    });
+    } catch {
+      if (control.type === "checkbox") control.checked = previous === "1";
+      else control.value = previous;
+      showToast("Não foi possível salvar. Tente novamente.");
+    } finally {
+      control.disabled = false;
+    }
+  };
+
+  // ===== Delegated account-surface dispatch. The account table is the stable
+  // root so controls in lazily inserted detail fragments work without rebinding.
+  const accountsRoot = document.querySelector("table.accounts");
+  accountsRoot?.addEventListener("click", (event) => {
+    const target = event.target.closest("[data-copy-value], [data-copy-input], [data-secret-show], [data-secret-copy], [data-edit-account], [data-expand]");
+    if (!target || !accountsRoot.contains(target)) return;
+    if (target.matches("[data-copy-value]")) copyValueControl(target);
+    else if (target.matches("[data-copy-input]")) copyInputControl(target);
+    else if (target.matches("[data-secret-show]")) handleSecretShow(target);
+    else if (target.matches("[data-secret-copy]")) handleSecretCopy(target);
+    else if (target.matches("[data-edit-account]")) handleEditAccount(target);
+    else if (target.matches("[data-expand]")) handleExpand(target);
+  });
+  accountsRoot?.addEventListener("change", (event) => {
+    const control = event.target.closest("[data-row-select], [data-autosubmit]");
+    if (!control || !accountsRoot.contains(control)) return;
+    if (control.matches("[data-row-select]")) handleRowSelectChange(control);
+    else handleAutosubmitChange(control);
+  });
+  // Copy controls outside the account surface (dialogs, admin pages) keep working
+  // via a document-level fallback that defers to the account root when it applies.
+  document.addEventListener("click", (event) => {
+    const target = event.target.closest("[data-copy-value], [data-copy-input]");
+    if (!target) return;
+    if (accountsRoot && accountsRoot.contains(target)) return;
+    if (target.matches("[data-copy-value]")) copyValueControl(target);
+    else copyInputControl(target);
   });
 
   // ===== Password visibility toggles.
@@ -1162,40 +1116,26 @@
       webhookAction(form, { confirm: "Excluir esta integração?", reloadOnSuccess: true });
     });
   });
-  // ===== Coverage matrix filtering.
-  const coverageFilter = document.getElementById("coverage-filter");
-  const coverageRows = Array.from(document.querySelectorAll("[data-coverage-row]"));
-  const coverageServiceToggles = Array.from(document.querySelectorAll("[data-coverage-service]"));
-  const applyCoverageFilter = () => {
-    const filter = coverageFilter?.value || "";
-    const checkedServices = coverageServiceToggles.filter((box) => box.checked).map((box) => box.value);
-    let visible = 0;
-    for (const row of coverageRows) {
-      let show;
-      if (filter === "none-registered") {
-        show = Number(row.dataset.regCount) === 0;
-      } else if (filter === "multi-active") {
-        show = Number(row.dataset.activeCount) > 1;
-      } else if (filter === "missing-registration") {
-        // Show when at least one checked service is not registered for this row.
-        // No checked services shows all rows.
-        show = checkedServices.length === 0 ||
-          checkedServices.some((id) => row.getAttribute("data-reg-svc-" + id) === "0");
-      } else {
-        show = true;
-      }
-      row.hidden = !show;
-      if (show) visible += 1;
-    }
-    // Service checkboxes only scope the missing-registration mode; hide them
-    // otherwise so irrelevant controls are absent while keeping checked state.
-    const serviceFieldset = document.querySelector(".coverage-service-filter");
-    if (serviceFieldset) serviceFieldset.hidden = filter !== "missing-registration";
-    const count = document.getElementById("coverage-count");
-    if (count) count.textContent = `Exibindo ${visible} de ${coverageRows.length} contas`;
-  };
-  coverageFilter?.addEventListener("change", applyCoverageFilter);
-  coverageServiceToggles.forEach((box) => box.addEventListener("change", applyCoverageFilter));
-  if (coverageFilter) applyCoverageFilter();
+  // ===== Coverage: the filter form drives a server-side query. The only
+  // client-side behavior retained is showing the selected-service fieldset for
+  // missing-registration; there is no full-table row scan.
+  const coverageForm = document.getElementById("coverage-form");
+  if (coverageForm) {
+    const coverageFilter = document.getElementById("coverage-filter");
+    const serviceFieldset = coverageForm.querySelector(".coverage-service-filter");
+    const syncServiceFieldset = () => {
+      // A disabled fieldset also drops its checkboxes from submission, so
+      // service IDs are sent only for missing-registration, never other filters.
+      const missing = (coverageFilter?.value || "") === "missing-registration";
+      if (serviceFieldset) { serviceFieldset.hidden = !missing; serviceFieldset.disabled = !missing; }
+    };
+    syncServiceFieldset();
+    coverageFilter?.addEventListener("change", () => {
+      syncServiceFieldset();
+      // missing-registration lets the user pick services before applying; every
+      // other filter navigates immediately.
+      if ((coverageFilter.value || "") !== "missing-registration") coverageForm.requestSubmit();
+    });
+  }
 
 })();

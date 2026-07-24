@@ -367,3 +367,238 @@ def test_require_account_role_initiating_link_404_and_all_links_denial(app):
 
 def _row(app, user_id: int):
     return get_db().execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+
+
+def _seed_account(app, email: str) -> int:
+    with app.app_context():
+        conn = get_db()
+        aid = inserted_id(conn.execute(
+            "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
+            (email, b"c", b"0" * 12),
+        ))
+        conn.commit()
+        return aid
+
+
+def _seed_link(app, account_id: int, service_id: int) -> None:
+    with app.app_context():
+        conn = get_db()
+        conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (account_id, service_id))
+        conn.commit()
+
+
+def _subscribe_authz_failure(app) -> None:
+    with app.app_context():
+        conn = get_db()
+        with transaction(conn):
+            cid = inserted_id(conn.execute(
+                "INSERT INTO webhook_configs (destination_host, url_ciphertext, url_nonce, url_key_version, signing_secret_ciphertext, signing_secret_nonce, signing_secret_key_version, created_at, updated_at) VALUES ('h.test', ?, ?, 1, ?, ?, 1, ?, ?)",
+                (b"u", b"0" * 12, b"s", b"1" * 12, datetime.now(UTC).isoformat(), datetime.now(UTC).isoformat()),
+            ))
+            conn.execute("INSERT INTO webhook_subscriptions (config_id, event_type) VALUES (?, 'authorization_failure')", (cid,))
+
+
+def _count_selects(conn, thunk):
+    selects = 0
+
+    def _trace(statement: str) -> None:
+        nonlocal selects
+        if statement.strip().upper().startswith("SELECT"):
+            selects += 1
+
+    conn.set_trace_callback(_trace)
+    try:
+        result = thunk()
+    finally:
+        conn.set_trace_callback(None)
+    return result, selects
+
+
+def test_require_accounts_role_ordinary_reads_are_constant_for_200_accounts(app):
+    from service_manager.authorization import require_accounts_role
+
+    op = _user(app, username="op")
+    sid = _service(app, "Bulk")
+    _membership(app, op, sid, "editor")
+    with app.app_context():
+        conn = get_db()
+        ids = []
+        for i in range(200):
+            aid = inserted_id(conn.execute(
+                "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
+                (f"ord-{i}@e.test", b"c", b"0" * 12),
+            ))
+            conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (aid, sid))
+            ids.append(aid)
+        conn.commit()
+    with app.test_request_context("/x", method="POST"):
+        g.current_user = _row(app, op)
+        conn = get_db()
+        role1, n1 = _count_selects(conn, lambda: require_accounts_role(conn, ids[:1], sid, "editor"))
+        role200, n200 = _count_selects(conn, lambda: require_accounts_role(conn, ids, sid, "editor"))
+    assert role1 == "editor"
+    assert role200 == "editor"
+    assert n1 == 2
+    assert n200 == 2
+
+
+def test_require_accounts_role_all_linked_reads_are_constant_for_200_accounts(app):
+    from service_manager.authorization import require_accounts_role
+
+    op = _user(app, username="op")
+    s1 = _service(app, "Init")
+    s2 = _service(app, "Two")
+    s3 = _service(app, "Three")
+    for sid in (s1, s2, s3):
+        _membership(app, op, sid, "service_admin")
+    with app.app_context():
+        conn = get_db()
+        ids = []
+        for i in range(200):
+            aid = inserted_id(conn.execute(
+                "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version) VALUES (?, ?, ?, 1)",
+                (f"all-{i}@e.test", b"c", b"0" * 12),
+            ))
+            conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (aid, s1))
+            if i > 0:
+                conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (aid, s2))
+                conn.execute("INSERT INTO account_service (account_id, service_id, status) VALUES (?, ?, 'ativo')", (aid, s3))
+            ids.append(aid)
+        conn.commit()
+    with app.test_request_context("/x", method="POST"):
+        g.current_user = _row(app, op)
+        conn = get_db()
+        role1, n1 = _count_selects(conn, lambda: require_accounts_role(conn, ids[:1], s1, "service_admin", all_linked_services=True))
+        role200, n200 = _count_selects(conn, lambda: require_accounts_role(conn, ids, s1, "service_admin", all_linked_services=True))
+    assert role1 == "service_admin"
+    assert role200 == "service_admin"
+    assert n1 == 3
+    assert n200 == 3
+
+
+def test_require_accounts_role_preserves_mixed_failure_order(app):
+    from service_manager.authorization import require_accounts_role
+    from werkzeug.exceptions import Forbidden, NotFound
+
+    op = _user(app, username="op")
+    s1 = _service(app, "Init")
+    _membership(app, op, s1, "viewer")  # below editor
+    _subscribe_authz_failure(app)
+    linked = _seed_account(app, "linked@e.test")
+    missing = _seed_account(app, "missing@e.test")
+    _seed_link(app, linked, s1)
+
+    with app.test_request_context("/x", method="POST"):
+        g.current_user = _row(app, op)
+        conn = get_db()
+        with pytest.raises(NotFound):
+            require_accounts_role(conn, [missing, linked], s1, "editor")
+    with app.app_context():
+        conn = get_db()
+        assert conn.execute("SELECT COUNT(*) FROM audit_events WHERE action='authorization.failed'").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM webhook_deliveries WHERE event_type='authorization_failure'").fetchone()[0] == 0
+
+    with app.test_request_context("/x", method="POST"):
+        g.current_user = _row(app, op)
+        conn = get_db()
+        with pytest.raises(Forbidden):
+            require_accounts_role(conn, [linked, missing], s1, "editor")
+    with app.app_context():
+        conn = get_db()
+        rows = conn.execute("SELECT target_type, target_id FROM audit_events WHERE action='authorization.failed'").fetchall()
+        assert len(rows) == 1
+        assert rows[0]["target_type"] == "service"
+        assert rows[0]["target_id"] == str(s1)
+        assert conn.execute("SELECT COUNT(*) FROM webhook_deliveries WHERE event_type='authorization_failure'").fetchone()[0] == 1
+
+
+def test_require_accounts_role_global_admin_checks_every_initiating_link(app):
+    from service_manager.authorization import require_accounts_role
+    from werkzeug.exceptions import NotFound
+
+    admin = _user(app, username="root", role="admin")
+    s1 = _service(app, "Init")
+    _subscribe_authz_failure(app)
+    linked = _seed_account(app, "l@e.test")
+    linked2 = _seed_account(app, "l2@e.test")
+    missing = _seed_account(app, "m@e.test")
+    _seed_link(app, linked, s1)
+    _seed_link(app, linked2, s1)
+
+    with app.test_request_context("/x", method="POST"):
+        g.current_user = _row(app, admin)
+        conn = get_db()
+        with pytest.raises(NotFound):
+            require_accounts_role(conn, [linked, missing], s1, "service_admin", all_linked_services=True)
+    with app.app_context():
+        conn = get_db()
+        assert conn.execute("SELECT COUNT(*) FROM audit_events WHERE action='authorization.failed'").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM webhook_deliveries WHERE event_type='authorization_failure'").fetchone()[0] == 0
+
+    with app.test_request_context("/x", method="POST"):
+        g.current_user = _row(app, admin)
+        conn = get_db()
+        role, n = _count_selects(conn, lambda: require_accounts_role(conn, [linked, linked2], s1, "service_admin", all_linked_services=True))
+    assert role == "admin"
+    assert n == 1
+
+
+def test_require_accounts_role_all_linked_denial_targets_first_failing_account(app):
+    from service_manager.authorization import require_accounts_role
+    from werkzeug.exceptions import Forbidden
+
+    op = _user(app, username="op")
+    s1 = _service(app, "Init")
+    s2 = _service(app, "Extra")
+    _membership(app, op, s1, "service_admin")  # no membership on s2
+    _subscribe_authz_failure(app)
+    first = _seed_account(app, "first@e.test")
+    second = _seed_account(app, "second@e.test")
+    _seed_link(app, first, s1)
+    _seed_link(app, second, s1)
+    _seed_link(app, second, s2)
+
+    with app.test_request_context("/x", method="POST"):
+        g.current_user = _row(app, op)
+        conn = get_db()
+        with pytest.raises(Forbidden):
+            require_accounts_role(conn, [first, second], s1, "service_admin", all_linked_services=True)
+    with app.app_context():
+        conn = get_db()
+        rows = conn.execute("SELECT target_type, target_id, metadata_json FROM audit_events WHERE action='authorization.failed'").fetchall()
+        assert len(rows) == 1
+        assert rows[0]["target_type"] == "account"
+        assert rows[0]["target_id"] == str(second)
+        meta = json.loads(rows[0]["metadata_json"])
+        assert meta["service_id"] == s1
+        assert meta["required_role"] == "service_admin"
+        deliveries = conn.execute("SELECT payload_json FROM webhook_deliveries WHERE event_type='authorization_failure'").fetchall()
+        assert len(deliveries) == 1
+        payload = json.loads(deliveries[0]["payload_json"])
+        assert payload["details"]["service_id"] == s1
+        assert payload["details"]["required_role"] == "service_admin"
+
+
+def test_require_accounts_role_denial_side_effects_rollback_together(app, monkeypatch):
+    from service_manager.authorization import require_accounts_role
+
+    op = _user(app, username="op")
+    s1 = _service(app, "Init")
+    _membership(app, op, s1, "viewer")  # below editor
+    _subscribe_authz_failure(app)
+    aid = _seed_account(app, "a@e.test")
+    _seed_link(app, aid, s1)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("service_manager.authorization.enqueue_webhook_event", _boom)
+    with app.test_request_context("/x", method="POST"):
+        g.current_user = _row(app, op)
+        conn = get_db()
+        with pytest.raises(RuntimeError):
+            require_accounts_role(conn, [aid], s1, "editor")
+    with app.app_context():
+        conn = get_db()
+        assert conn.execute("SELECT COUNT(*) FROM audit_events WHERE action='authorization.failed'").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM webhook_deliveries WHERE event_type='authorization_failure'").fetchone()[0] == 0

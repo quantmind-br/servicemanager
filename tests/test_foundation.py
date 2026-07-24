@@ -115,7 +115,16 @@ def test_index_requires_authentication_and_never_renders_the_account_password(ap
     assert response.status_code == 200
     assert "person@example.test" in body
     assert "known-password" not in body
-    assert "known-field-value" in body
+    assert "known-field-value" not in body
+
+    with app.app_context():
+        account_id = get_db().execute("SELECT id FROM accounts WHERE email='person@example.test'").fetchone()["id"]
+    detail = client.get(f"/accounts/{account_id}/details?service={service_id}")
+    assert detail.status_code == 200
+    assert detail.headers["Cache-Control"] == "no-store, private"
+    fragment = detail.get_data(as_text=True)
+    assert "known-field-value" in fragment
+    assert "known-password" not in fragment
 
 
 @pytest.mark.parametrize(
@@ -217,9 +226,13 @@ def test_corrupt_xlsx_import_redirects_with_format_error_without_mutating(app, c
 
 
 def test_labeled_import_without_password_column_does_not_shift_status_into_password():
-    records = parse_import_file("accounts.csv", b"email,status\nperson@example.test,ativo\n")
+    parsed = parse_import_file("accounts.csv", b"email,status\nperson@example.test,ativo\n")
 
-    assert records == [("person@example.test", "", "ativo")]
+    assert parsed.field_names == ()
+    assert parsed.records[0].email == "person@example.test"
+    assert parsed.records[0].password == ""
+    assert parsed.records[0].status == "ativo"
+    assert parsed.records[0].field_values == ()
 
 def test_labeled_import_without_email_column_is_rejected():
     with pytest.raises(ValueError, match="email"):

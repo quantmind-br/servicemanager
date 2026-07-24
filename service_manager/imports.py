@@ -6,6 +6,7 @@ import itertools
 import zipfile
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Final, IO
 
@@ -30,6 +31,20 @@ class ImportFormatError(ValueError):
     def __init__(self, kind: str, message: str):
         super().__init__(message)
         self.kind = kind
+
+
+@dataclass(frozen=True, slots=True)
+class ImportRecord:
+    email: str
+    password: str
+    status: str
+    field_values: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedImport:
+    field_names: tuple[str, ...]
+    records: tuple[ImportRecord, ...]
 
 
 def has_allowed_upload_mimetype(filename: str, mimetype: str | None) -> bool:
@@ -182,24 +197,39 @@ def _import_rows(filename: str, stream: IO[bytes]) -> Iterator[list[str]]:
     raise ImportFormatError("format", "unsupported import format")
 
 
-def parse_import_file(filename: str, data: bytes | IO[bytes]) -> list[tuple[str, str, str]]:
+def parse_import_file(filename: str, data: bytes | IO[bytes]) -> ParsedImport:
     """Strictly parse a supported import stream without accepting lossy encodings."""
     rows = (row for row in _import_rows(filename, _as_binary_stream(data)) if any(row))
     try:
         header = next(rows)
     except StopIteration:
-        return []
-    headers = [value.strip().lower() for value in header]
-    labelled = any(value in {"email", "e-mail", "senha", "password", "status"} for value in headers)
+        return ParsedImport(field_names=(), records=())
+    trimmed = [value.strip() for value in header]
+    lowered = [value.lower() for value in trimmed]
+    field_names: list[str] = []
+    field_indices: list[int] = []
+    seen_field_names: set[str] = set()
+    for index, low in enumerate(lowered):
+        if not low.startswith("campo:"):
+            continue
+        name = trimmed[index][len("campo:"):].strip()
+        if not name:
+            raise ImportFormatError("format", "additional field column requires a name")
+        if name in seen_field_names:
+            raise ImportFormatError("format", "duplicate additional field column")
+        seen_field_names.add(name)
+        field_names.append(name)
+        field_indices.append(index)
+    labelled = bool(field_indices) or any(value in {"email", "e-mail", "senha", "password", "status"} for value in lowered)
     positions = {
-        "email": next((index for index, value in enumerate(headers) if value in {"email", "e-mail"}), None if labelled else 0),
-        "password": next((index for index, value in enumerate(headers) if value in {"password", "senha", "pass"}), None if labelled else 1),
-        "status": next((index for index, value in enumerate(headers) if value == "status"), None if labelled else 2),
+        "email": next((index for index, value in enumerate(lowered) if value in {"email", "e-mail"}), None if labelled else 0),
+        "password": next((index for index, value in enumerate(lowered) if value in {"password", "senha", "pass"}), None if labelled else 1),
+        "status": next((index for index, value in enumerate(lowered) if value == "status"), None if labelled else 2),
     }
     if labelled and positions["email"] is None:
         raise ImportFormatError("format", "labeled import requires an email column")
 
-    records: list[tuple[str, str, str]] = []
+    records: list[ImportRecord] = []
     body = rows if labelled else itertools.chain((header,), rows)
     for row in body:
         if len(records) >= MAX_RECORDS:
@@ -208,5 +238,10 @@ def parse_import_file(filename: str, data: bytes | IO[bytes]) -> list[tuple[str,
         def cell(index: int | None) -> str:
             return row[index] if index is not None and index < len(row) else ""
 
-        records.append((cell(positions["email"]), cell(positions["password"]), cell(positions["status"])))
-    return records
+        records.append(ImportRecord(
+            email=cell(positions["email"]),
+            password=cell(positions["password"]),
+            status=cell(positions["status"]),
+            field_values=tuple(cell(index) for index in field_indices),
+        ))
+    return ParsedImport(field_names=tuple(field_names), records=tuple(records))
