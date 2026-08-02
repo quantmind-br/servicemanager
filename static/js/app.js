@@ -1168,12 +1168,11 @@
     if (button) { button.disabled = true; button.textContent = "Enviando…"; }
     if (apiKeyCreateError) { apiKeyCreateError.hidden = true; apiKeyCreateError.textContent = ""; }
     try {
-      const response = await fetch(apiKeyCreateForm.action, {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "X-CSRFToken": csrfToken, "Accept": "application/json" },
-        body: new URLSearchParams(new FormData(apiKeyCreateForm)),
-      });
+      const response = await adminFetch(
+        apiKeyCreateForm.action,
+        new URLSearchParams(new FormData(apiKeyCreateForm)),
+      );
+      if (!response) return;
       if (response.status === 201) {
         const payload = await response.json();
         const input = document.getElementById("api-key-secret-value");
