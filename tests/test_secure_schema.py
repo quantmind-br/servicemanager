@@ -46,6 +46,7 @@ def test_new_database_has_the_exact_username_only_secure_schema(app):
         "webhook_subscriptions",
         "webhook_deliveries",
         "app_settings",
+        "api_keys",
     }
     expected_user_columns = {
         "id",
@@ -68,6 +69,8 @@ def test_new_database_has_the_exact_username_only_secure_schema(app):
         assert not tables & forbidden
         assert conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'bootstrap_tokens_one_active'").fetchone() is None
         assert table_columns(conn, "app_settings") == {"key", "value"}
+        assert table_columns(conn, "api_keys") == {"id", "name", "secret_hash", "created_at", "last_used_at", "revoked_at"}
+        assert conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'api_keys_active_hash'").fetchone() is not None
         # A fresh database has no settings rows; the rotation control defaults to disabled.
         assert conn.execute("SELECT COUNT(*) FROM app_settings").fetchone()[0] == 0
         assert {"password_ciphertext", "password_nonce", "password_key_version"} <= table_columns(conn, "accounts")

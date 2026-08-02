@@ -17,7 +17,7 @@
     <span class="muted header-user">{{ g.current_user['username'] }}{% if g.current_user['role'] == 'admin' %} · admin{% endif %}</span>
     <div class="header-actions">
       {% if g.current_user['role'] == 'admin' %}
-      {% set admin_endpoints = ['auth.users', 'routes.service_access', 'routes.audit_view', 'routes.security_integrations', 'routes.settings_view'] %}
+      {% set admin_endpoints = ['auth.users', 'routes.service_access', 'routes.audit_view', 'routes.security_integrations', 'routes.settings_view', 'routes.api_keys_view'] %}
       <details class="admin-menu{% if request.endpoint in admin_endpoints %} is-current{% endif %}">
         <summary class="admin-menu-trigger">Administração</summary>
         <nav class="admin-menu-panel" aria-label="Administração">
@@ -40,6 +40,10 @@
           <a class="admin-menu-item{% if request.endpoint == 'routes.settings_view' %} is-current{% endif %}" href="{{ url_for('routes.settings_view') }}"{% if request.endpoint == 'routes.settings_view' %} aria-current="page"{% endif %}>
             <span class="admin-menu-item-label">Configurações</span>
             <span class="admin-menu-item-description">Controles globais</span>
+          </a>
+          <a class="admin-menu-item{% if request.endpoint == 'routes.api_keys_view' %} is-current{% endif %}" href="{{ url_for('routes.api_keys_view') }}"{% if request.endpoint == 'routes.api_keys_view' %} aria-current="page"{% endif %}>
+            <span class="admin-menu-item-label">API keys</span>
+            <span class="admin-menu-item-description">Integrações por chave</span>
           </a>
         </nav>
       </details>

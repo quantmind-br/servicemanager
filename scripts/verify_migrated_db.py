@@ -18,12 +18,14 @@ from _pre_feature_schema import PRE_FEATURE_SCHEMA
 from service_manager.audit import verify_audit_chain_with_key
 from service_manager.db import SCHEMA
 from service_preferences_schema import PRE_SERVICE_PREFERENCES_SCHEMA
+from api_keys_schema import PRE_API_KEYS_SCHEMA
 
 EXPECTED_COUNTS = {"accounts": 116, "account_service": 116, "field_values": 116, "credentials_backup": 116}
 EXPECTED_TABLES = {
     "accounts", "services", "account_service", "custom_fields", "field_values", "users",
     "security_events", "audit_events", "service_members", "user_service_preferences",
     "webhook_configs", "webhook_subscriptions", "webhook_deliveries", "app_settings",
+    "api_keys",
 }
 EXPECTED_COLUMNS = {
     "accounts": {"id", "email", "password_ciphertext", "password_nonce", "password_key_version", "password_changed_at"},
@@ -40,6 +42,7 @@ EXPECTED_COLUMNS = {
     "webhook_subscriptions": {"config_id", "event_type"},
     "webhook_deliveries": {"id", "config_id", "event_type", "payload_json", "status", "attempt_count", "next_attempt_at", "lease_token", "leased_at", "last_status_code", "last_error", "created_at", "delivered_at"},
     "app_settings": {"key", "value"},
+    "api_keys": {"id", "name", "secret_hash", "created_at", "last_used_at", "revoked_at"},
 }
 REQUIRED_TRIGGERS = {"audit_events_no_update", "audit_events_no_delete"}
 
@@ -118,6 +121,7 @@ def _schema_from(schema_sql: str) -> dict[str, dict[str, str]]:
 
 
 CANONICAL_SECURE_SCHEMA = _schema_from(SCHEMA)
+PRE_API_KEYS_SECURE_SCHEMA = _schema_from(PRE_API_KEYS_SCHEMA)
 PRE_SERVICE_PREFERENCES_SECURE_SCHEMA = _schema_from(PRE_SERVICE_PREFERENCES_SCHEMA)
 # Source validation compares against the frozen pre-feature schema, never the live SCHEMA.
 PRE_FEATURE_SECURE_SCHEMA = _schema_from(PRE_FEATURE_SCHEMA)
@@ -156,7 +160,7 @@ def _validate_new_canonical_target(conn: sqlite3.Connection) -> None:
 
 
 def _validate_pre_preferences_target(conn: sqlite3.Connection) -> None:
-    columns = {table: values for table, values in EXPECTED_COLUMNS.items() if table != "user_service_preferences"}
+    columns = {table: values for table, values in EXPECTED_COLUMNS.items() if table not in {"user_service_preferences", "api_keys"}}
     _validate_schema_target(conn, PRE_SERVICE_PREFERENCES_SECURE_SCHEMA, columns)
 
 
@@ -350,6 +354,11 @@ def _all_table_rows(conn: sqlite3.Connection, tables: set[str]) -> dict[str, lis
     }
 
 
+def _validate_pre_api_keys_target(conn: sqlite3.Connection) -> None:
+    columns = {table: values for table, values in EXPECTED_COLUMNS.items() if table != "api_keys"}
+    _validate_schema_target(conn, PRE_API_KEYS_SECURE_SCHEMA, columns)
+
+
 def _verify_service_preferences_hop(
     source: sqlite3.Connection,
     target: sqlite3.Connection,
@@ -358,8 +367,30 @@ def _verify_service_preferences_hop(
     _validate_schema_target(
         source,
         PRE_SERVICE_PREFERENCES_SECURE_SCHEMA,
-        {table: values for table, values in EXPECTED_COLUMNS.items() if table != "user_service_preferences"},
+        {table: values for table, values in EXPECTED_COLUMNS.items() if table not in {"user_service_preferences", "api_keys"}},
     )
+    if not verify_audit_chain_with_key(source, audit_key):
+        raise ScriptError("source audit chain validation failed")
+    source_tables = _table_names(source)
+    source_rows = _all_table_rows(source, source_tables)
+    source_sequences = [tuple(row) for row in source.execute("SELECT name, seq FROM sqlite_sequence ORDER BY name")]
+    _validate_pre_api_keys_target(target)
+    if _all_table_rows(target, source_tables) != source_rows:
+        raise ScriptError("target rows do not match source")
+    if [tuple(row) for row in target.execute("SELECT name, seq FROM sqlite_sequence ORDER BY name")] != source_sequences:
+        raise ScriptError("target sequences do not match source")
+    if target.execute("SELECT COUNT(*) FROM user_service_preferences").fetchone()[0]:
+        raise ScriptError("target service preferences initialization failed")
+    if not verify_audit_chain_with_key(target, audit_key):
+        raise ScriptError("target audit chain validation failed")
+
+
+def _verify_api_keys_hop(
+    source: sqlite3.Connection,
+    target: sqlite3.Connection,
+    audit_key: bytes,
+) -> None:
+    _validate_pre_api_keys_target(source)
     if not verify_audit_chain_with_key(source, audit_key):
         raise ScriptError("source audit chain validation failed")
     source_tables = _table_names(source)
@@ -370,8 +401,8 @@ def _verify_service_preferences_hop(
         raise ScriptError("target rows do not match source")
     if [tuple(row) for row in target.execute("SELECT name, seq FROM sqlite_sequence ORDER BY name")] != source_sequences:
         raise ScriptError("target sequences do not match source")
-    if target.execute("SELECT COUNT(*) FROM user_service_preferences").fetchone()[0]:
-        raise ScriptError("target service preferences initialization failed")
+    if target.execute("SELECT COUNT(*) FROM api_keys").fetchone()[0]:
+        raise ScriptError("target api keys initialization failed")
     if not verify_audit_chain_with_key(target, audit_key):
         raise ScriptError("target audit chain validation failed")
 
@@ -398,6 +429,11 @@ def verify(
             _secure(target)
             _compare(target, source_data, data_key)
             _scan(target_path, source_data)
+        elif _matches_schema(source, PRE_API_KEYS_SECURE_SCHEMA):
+            if _after_snapshot_ready is not None:
+                _after_snapshot_ready()
+            _verify_api_keys_hop(source, target, audit_key)
+            _scan_pre_feature(target_path, target, data_key)
         elif _matches_schema(source, PRE_SERVICE_PREFERENCES_SECURE_SCHEMA):
             if _after_snapshot_ready is not None:
                 _after_snapshot_ready()

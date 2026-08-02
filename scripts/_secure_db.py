@@ -12,6 +12,7 @@ EXPECTED_SECURE_TABLES = {
     "accounts", "services", "account_service", "custom_fields", "field_values", "users",
     "security_events", "audit_events", "service_members", "user_service_preferences",
     "webhook_configs", "webhook_subscriptions", "webhook_deliveries", "app_settings",
+    "api_keys",
 }
 EXPECTED_SECURE_COLUMNS = {
     "accounts": {"id", "email", "password_ciphertext", "password_nonce", "password_key_version", "password_changed_at"},
@@ -28,6 +29,7 @@ EXPECTED_SECURE_COLUMNS = {
     "webhook_subscriptions": {"config_id", "event_type"},
     "webhook_deliveries": {"id", "config_id", "event_type", "payload_json", "status", "attempt_count", "next_attempt_at", "lease_token", "leased_at", "last_status_code", "last_error", "created_at", "delivered_at"},
     "app_settings": {"key", "value"},
+    "api_keys": {"id", "name", "secret_hash", "created_at", "last_used_at", "revoked_at"},
 }
 REQUIRED_TRIGGERS = {
     "audit_events_no_update", "audit_events_no_delete",

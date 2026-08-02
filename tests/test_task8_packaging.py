@@ -270,10 +270,14 @@ def test_feature_source_files_are_present_for_packaging():
     """The feature cutover ships these files; the Dockerfile copies their parent dirs."""
     for relative in (
         "service_manager/webhooks.py",
+        "service_manager/api.py",
+        "service_manager/operations.py",
         "scripts/webhook_worker.py",
+        "scripts/migrate_api_keys.py",
         "templates/service_access.html",
         "templates/rotation.html",
         "templates/security_integrations.html",
+        "templates/api_keys.html",
     ):
         assert (ROOT / relative).is_file(), relative
 
@@ -291,6 +295,7 @@ def test_nginx_enforces_upload_limits_proxy_timeouts_rate_limiting_and_defensive
         "proxy_read_timeout 30s;",
         "limit_req_zone $binary_remote_addr zone=uploads:10m rate=6r/m;",
         "location = /import",
+        "location ~ ^/api/v1/services/[0-9]+/imports$",
         "limit_req zone=uploads burst=2 nodelay;",
         "pid /tmp/nginx/nginx.pid;",
         "access_log /dev/stdout;",

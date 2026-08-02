@@ -15,6 +15,7 @@ from service_manager.audit import verify_audit_chain
 from service_manager.db import get_db, init_app as init_db_app
 from service_manager.webhooks import record_audit_degraded
 from service_manager.routes import routes
+from service_manager.api import api
 
 
 def _trusted_proxy_hops(config: Mapping[str, Any] | None) -> int:
@@ -78,6 +79,7 @@ def create_app(config: Mapping[str, Any] | None = None) -> Flask:
     app.config["IS_PRODUCTION"] = environment == "production"
 
     init_db_app(app)
+    app.register_blueprint(api)
     app.register_blueprint(routes)
     app.register_blueprint(auth)
     bind_auth(app)

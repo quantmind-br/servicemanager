@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
-from flask import Flask, abort, request
+from flask import Flask, abort, g, request
 from flask_wtf.csrf import CSRFError, CSRFProtect
 
 csrf = CSRFProtect()
@@ -49,9 +49,15 @@ def init_app(app: Flask) -> None:
     # gate below remains authoritative alongside Flask-WTF's token validation.
     app.config.setdefault("WTF_CSRF_SSL_STRICT", False)
     csrf.init_app(app)
+    from service_manager.api import api
+
+    csrf.exempt(api)
+
     @app.before_request
     def reject_untrusted_mutation_origin() -> None:
         if not app.config["CSRF_ORIGIN_CHECK"] or request.method not in _UNSAFE_METHODS:
+            return None
+        if request.blueprint == "api" and getattr(g, "api_key", None) is not None:
             return None
         public_origin = app.config["PUBLIC_ORIGIN"]
         claimed_origin = request.headers.get("Origin") or request.headers.get("Referer")

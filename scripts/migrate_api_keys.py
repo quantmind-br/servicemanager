@@ -24,10 +24,10 @@ from _secure_db import (
     sidecars,
 )
 from service_manager.audit import verify_audit_chain_with_key
-from api_keys_schema import PRE_API_KEYS_SCHEMA as TARGET_SCHEMA
-from service_preferences_schema import PRE_SERVICE_PREFERENCES_SCHEMA
+from service_manager.db import SCHEMA as TARGET_SCHEMA
+from api_keys_schema import PRE_API_KEYS_SCHEMA
 
-_SOURCE_OBJECTS, _SOURCE_COLUMNS = frozen_schema_objects(PRE_SERVICE_PREFERENCES_SCHEMA)
+_SOURCE_OBJECTS, _SOURCE_COLUMNS = frozen_schema_objects(PRE_API_KEYS_SCHEMA)
 _TARGET_OBJECTS, _TARGET_COLUMNS = frozen_schema_objects(TARGET_SCHEMA)
 _ROW_TABLES = tuple(sorted(_SOURCE_COLUMNS))
 
@@ -76,8 +76,8 @@ def _validate_destination(
             raise ScriptError("target rows do not match the source")
         if _sequences(conn) != expected_sequences:
             raise ScriptError("target sequences do not match the source")
-        if conn.execute("SELECT COUNT(*) FROM user_service_preferences").fetchone()[0]:
-            raise ScriptError("target service preferences initialization failed")
+        if conn.execute("SELECT COUNT(*) FROM api_keys").fetchone()[0]:
+            raise ScriptError("target api keys initialization failed")
     except sqlite3.Error as error:
         raise ScriptError("target validation failed") from error
 
@@ -115,20 +115,17 @@ def migrate(source_path: Path, target_path: Path, audit_key_env: str = "AUDIT_KE
             raise ScriptError("target foreign-key enforcement is disabled")
         destination.execute("BEGIN IMMEDIATE")
         destination.execute(
-            "CREATE TABLE user_service_preferences (\n"
-            "    user_id INTEGER NOT NULL,\n"
-            "    service_id INTEGER NOT NULL,\n"
-            "    position INTEGER NOT NULL CHECK (position >= 0),\n"
-            "    is_initial INTEGER NOT NULL DEFAULT 0 CHECK (is_initial IN (0, 1)),\n"
-            "    PRIMARY KEY (user_id, service_id),\n"
-            "    UNIQUE (user_id, position),\n"
-            "    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,\n"
-            "    FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE CASCADE\n"
+            "CREATE TABLE api_keys (\n"
+            "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+            "    name TEXT NOT NULL UNIQUE COLLATE NOCASE,\n"
+            "    secret_hash BLOB NOT NULL UNIQUE CHECK(length(secret_hash)=32),\n"
+            "    created_at TEXT NOT NULL,\n"
+            "    last_used_at TEXT,\n"
+            "    revoked_at TEXT\n"
             ")"
         )
         destination.execute(
-            "CREATE UNIQUE INDEX user_service_preferences_one_initial "
-            "ON user_service_preferences(user_id) WHERE is_initial = 1"
+            "CREATE INDEX api_keys_active_hash ON api_keys(secret_hash) WHERE revoked_at IS NULL"
         )
         _validate_destination(destination, expected_rows, expected_sequences, audit_key)
         destination.commit()
@@ -159,7 +156,7 @@ def migrate(source_path: Path, target_path: Path, audit_key_env: str = "AUDIT_KE
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Offline service preferences schema migration")
+    parser = argparse.ArgumentParser(description="Offline API keys schema migration")
     parser.add_argument("--source", required=True)
     parser.add_argument("--target", required=True)
     parser.add_argument("--audit-key-env", default="AUDIT_KEY_V1")
@@ -173,7 +170,7 @@ def main() -> int:
     except ScriptError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
-    print("OK: service preferences schema migrated")
+    print("OK: api keys schema migrated")
     return 0
 
 

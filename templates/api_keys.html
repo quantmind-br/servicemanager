@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}API keys · Service Manager{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">Administração</p>
+  <h1>API keys</h1>
+  <p class="muted">Crie e revogue chaves de integração servidor-a-servidor. O valor completo só aparece uma vez.</p>
+</section>
+
+<section class="panel">
+  <div class="panel-heading">
+    <h2>Chaves</h2>
+    <p>{{ api_keys|length }} cadastradas</p>
+  </div>
+  <div class="table-wrap">
+    <table class="admin-users-table">
+      <thead>
+        <tr>
+          <th scope="col">Nome</th>
+          <th scope="col">Criada em</th>
+          <th scope="col">Último uso</th>
+          <th scope="col">Estado</th>
+          <th scope="col">Ações</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for key in api_keys %}
+        <tr>
+          <td><strong>{{ key['name'] }}</strong></td>
+          <td>{{ key['created_at'] }}</td>
+          <td>{{ key['last_used_at'] or '—' }}</td>
+          <td>
+            {% if key['revoked_at'] %}
+            <span class="stat-dot dot-inativo">Revogada</span>
+            <span class="muted-hint">{{ key['revoked_at'] }}</span>
+            {% else %}
+            <span class="stat-dot dot-ativo">Ativa</span>
+            {% endif %}
+          </td>
+          <td class="cell-actions">
+            {% if not key['revoked_at'] %}
+            <form method="post" action="{{ url_for('routes.api_keys_revoke', key_id=key['id']) }}" data-api-key-revoke data-confirm="Revogar esta API key? Integrações que a usam deixarão de autenticar.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="button button-small button-danger" type="submit">Revogar</button>
+            </form>
+            {% else %}
+            <span class="muted-hint">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5"><p class="empty-state">Nenhuma API key cadastrada.</p></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel admin-create-panel">
+  <div class="panel-heading"><h2>Criar API key</h2><p>O valor completo aparece uma única vez.</p></div>
+  <form method="post" action="{{ url_for('routes.api_keys_create') }}" data-api-key-create class="inline-form-grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Nome<input name="name" type="text" autocomplete="off" required minlength="1" maxlength="100"></label>
+    <button class="button" type="submit">Criar</button>
+  </form>
+  <p class="feedback-error" data-api-key-create-error hidden></p>
+</section>
+
+<dialog id="api-key-dialog" class="account-edit-dialog" aria-labelledby="api-key-title">
+  <h3 id="api-key-title">API key criada</h3>
+  <p class="muted">Copie agora. O sistema não mostrará este valor novamente.</p>
+  <code class="temporary-password" data-api-key-value></code>
+  <div class="copy-input-row">
+    <input id="api-key-secret-value" type="text" value="" readonly aria-label="API key">
+    <button class="copy-button" type="button" data-copy-input="api-key-secret-value" aria-label="Copiar API key" title="Copiar API key"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="5" y="5" width="8" height="9" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M11 5V3.4A1.4 1.4 0 0 0 9.6 2H3.4A1.4 1.4 0 0 0 2 3.4v6.2A1.4 1.4 0 0 0 3.4 11H5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg><span class="copy-feedback" aria-live="polite"></span></button>
+  </div>
+  <div class="dialog-actions"><button class="button button-small" type="button" data-api-key-dismiss>Concluir</button></div>
+</dialog>
+<div id="toast" class="toast" role="alert" hidden></div>
+<span id="save-announcer" class="sr-only" aria-live="polite"></span>
+{% endblock %}

@@ -18,6 +18,14 @@ from service_manager.audit import append_audit_event, append_audit_event_in_tran
 from service_manager.crypto import hash_password, needs_password_rehash, verify_password
 from service_manager.db import get_db, inserted_id, transaction
 from service_manager.webhooks import enqueue_webhook_event, record_audit_degraded
+from service_manager.operations import (
+    DomainError,
+    NotFoundError,
+    change_user_active as op_change_user_active,
+    change_user_role as op_change_user_role,
+    create_user as op_create_user,
+    principal_from_user,
+)
 
 
 auth = Blueprint("auth", __name__)
@@ -302,6 +310,8 @@ def bind_auth(app: Flask) -> None:
     def authenticate_protected_requests() -> ResponseReturnValue | None:
         if request.endpoint is None or request.endpoint in {"routes.healthz", "auth.login", "static"}:
             return None
+        if getattr(g, "api_key", None) is not None:
+            return None
         user = _session_user()
         if user is None:
             session.clear()
@@ -462,32 +472,22 @@ def _request_value(name: str) -> Any:
 @require_role("admin")
 def create_user() -> ResponseReturnValue:
     require_recent_reauth()
-    username = normalize_username(_request_value("username"))
+    username = _request_value("username") or ""
     role = _request_value("role") or ""
-    if not username or role not in {"admin", "operador"}:
-        return Response("Usuário inválido", status=400)
-    temporary_password = secrets.token_urlsafe(24)
     conn = get_db()
     try:
         with transaction(conn):
-            stamp = now_text()
-            user_id = inserted_id(conn.execute(
-                "INSERT INTO users (username,password_hash,role,is_active,must_change_password,created_at,updated_at,password_changed_at) "
-                "VALUES (?, ?, ?, 1, 1, ?, ?, ?)",
-                (username, hash_password(temporary_password), role, stamp, stamp, stamp),
-            ))
-            _audit(conn, action="user.created", target_type="user", target_id=user_id, actor_user_id=g.current_user["id"], metadata={"role": role})
-    except sqlite3.IntegrityError:
-        return Response("Login indisponível", status=409)
+            user_id, temporary_password = op_create_user(
+                conn,
+                principal_from_user(g.current_user),
+                username=str(username),
+                role=str(role),
+            )
+    except DomainError as error:
+        return Response(error.message, status=error.status)
     return jsonify(id=user_id, temporary_password=temporary_password), 201
 
 
-def _last_admin_change_would_break(conn: Any, target: Any, *, role: str | None = None, is_active: bool | None = None) -> bool:
-    resulting_admin = target["role"] if role is None else role
-    resulting_active = bool(target["is_active"]) if is_active is None else is_active
-    if target["role"] != "admin" or not target["is_active"] or (resulting_admin == "admin" and resulting_active):
-        return False
-    return conn.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND is_active=1").fetchone()[0] <= 1
 
 
 @auth.post("/admin/users/<int:user_id>/role")
@@ -495,31 +495,15 @@ def _last_admin_change_would_break(conn: Any, target: Any, *, role: str | None =
 def change_role(user_id: int) -> ResponseReturnValue:
     require_recent_reauth()
     role = request.form.get("role", "")
-    if role not in {"admin", "operador"}:
-        return Response("Papel inválido", status=400)
     conn = get_db()
-    with transaction(conn):
-        target = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
-        if target is None:
-            abort(404)
-        if _last_admin_change_would_break(conn, target, role=role):
-            return Response("Último administrador ativo", status=400)
-        if target["role"] == role:
-            return Response(status=204)
-        if role == "admin":
-            # Global bypass supersedes any per-service memberships.
-            conn.execute("DELETE FROM service_members WHERE user_id=?", (user_id,))
-            membership_count = 0
-        else:
-            # Preserve pre-demotion reach: service_admin on every existing service.
-            conn.execute(
-                "INSERT INTO service_members (user_id, service_id, role, created_at) "
-                "SELECT ?, id, 'service_admin', ? FROM services",
-                (user_id, now_text()),
-            )
-            membership_count = conn.execute("SELECT COUNT(*) FROM service_members WHERE user_id=?", (user_id,)).fetchone()[0]
-        conn.execute("UPDATE users SET role=?, session_version=session_version+1, updated_at=? WHERE id=?", (role, now_text(), user_id))
-        _audit(conn, action="user.role_changed", target_type="user", target_id=user_id, actor_user_id=g.current_user["id"], metadata={"role": role, "membership_count": membership_count})
+    try:
+        with transaction(conn):
+            op_change_user_role(conn, principal_from_user(g.current_user), user_id=user_id, role=role)
+    except NotFoundError:
+        abort(404)
+    except DomainError as error:
+        # UI contract keeps 400 for last-admin and invalid role.
+        return Response(error.message, status=400)
     return Response(status=204)
 
 
@@ -529,15 +513,11 @@ def change_active(user_id: int) -> ResponseReturnValue:
     require_recent_reauth()
     active = request.form.get("is_active") in {"1", "true", "on"}
     conn = get_db()
-    with transaction(conn):
-        target = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
-        if target is None:
-            abort(404)
-        if _last_admin_change_would_break(conn, target, is_active=active):
-            return Response("Último administrador ativo", status=400)
-        conn.execute("UPDATE users SET is_active=?, session_version=session_version+1, updated_at=? WHERE id=?", (int(active), now_text(), user_id))
-        _audit(conn, action="user.active_changed", target_type="user", target_id=user_id, actor_user_id=g.current_user["id"], metadata={"active": active})
-        if target["is_active"] and not active:
-            # Only on a true->false transition.
-            enqueue_webhook_event(conn, "user_deactivated", {"actor_user_id": g.current_user["id"], "target_user_id": user_id})
+    try:
+        with transaction(conn):
+            op_change_user_active(conn, principal_from_user(g.current_user), user_id=user_id, is_active=active)
+    except NotFoundError:
+        abort(404)
+    except DomainError as error:
+        return Response(error.message, status=400)
     return Response(status=204)

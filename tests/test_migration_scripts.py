@@ -27,6 +27,7 @@ BACKUP = ROOT / "scripts" / "backup.py"
 RESTORE = ROOT / "scripts" / "restore_backup.py"
 AUTH_MIGRATE = ROOT / "scripts" / "migrate_auth_schema.py"
 SERVICE_PREFERENCES_MIGRATE = ROOT / "scripts" / "migrate_service_preferences.py"
+API_KEYS_MIGRATE = ROOT / "scripts" / "migrate_api_keys.py"
 DATA_KEY = base64.b64encode(b"d" * 32).decode("ascii")
 BACKUP_KEY = base64.b64encode(b"b" * 32).decode("ascii")
 
@@ -142,35 +143,52 @@ def test_auth_schema_migration_exposes_the_approved_api():
 def _run_auth_migration(source: Path, target: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AUDIT_KEY_V1", DATA_KEY)
     pre_preferences = target.with_name(f".{target.name}.pre-preferences")
+    pre_api_keys = target.with_name(f".{target.name}.pre-api-keys")
     auth_migration = _script_module("migrate_auth_schema")
     preferences_migration = _script_module("migrate_service_preferences")
+    api_keys_migration = _script_module("migrate_api_keys")
     try:
         auth_migration.migrate(source, pre_preferences, "AUDIT_KEY_V1")
-        preferences_migration.migrate(pre_preferences, target, "AUDIT_KEY_V1")
+        preferences_migration.migrate(pre_preferences, pre_api_keys, "AUDIT_KEY_V1")
+        api_keys_migration.migrate(pre_api_keys, target, "AUDIT_KEY_V1")
     finally:
         pre_preferences.unlink(missing_ok=True)
+        pre_api_keys.unlink(missing_ok=True)
 
 
 def _run_legacy_migration(source: Path, target: Path, *, key_env: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     pre_preferences = target.with_name(f".{target.name}.pre-preferences")
+    pre_api_keys = target.with_name(f".{target.name}.pre-api-keys")
     first = _run(MIGRATE, "--source", str(source), "--target", str(pre_preferences), "--key-env", key_env, env=env)
     if first.returncode != 0:
         return first
     second = _run(
         SERVICE_PREFERENCES_MIGRATE,
         "--source", str(pre_preferences),
+        "--target", str(pre_api_keys),
+        env={**env, "AUDIT_KEY_V1": env[key_env]},
+    )
+    if second.returncode != 0:
+        pre_preferences.unlink(missing_ok=True)
+        pre_api_keys.unlink(missing_ok=True)
+        return second
+    third = _run(
+        API_KEYS_MIGRATE,
+        "--source", str(pre_api_keys),
         "--target", str(target),
         env={**env, "AUDIT_KEY_V1": env[key_env]},
     )
     pre_preferences.unlink(missing_ok=True)
-    return second
+    pre_api_keys.unlink(missing_ok=True)
+    return third
 
 _PRE_PREFERENCES_TABLES = {
     "accounts", "services", "account_service", "custom_fields", "field_values", "users",
     "security_events", "audit_events", "service_members",
     "webhook_configs", "webhook_subscriptions", "webhook_deliveries", "app_settings",
 }
-_NEW_CANONICAL_TABLES = _PRE_PREFERENCES_TABLES | {"user_service_preferences"}
+_PRE_API_KEYS_TABLES = _PRE_PREFERENCES_TABLES | {"user_service_preferences"}
+_NEW_CANONICAL_TABLES = _PRE_API_KEYS_TABLES | {"api_keys"}
 
 
 def _pre_service_preferences_source(path: Path) -> None:
@@ -239,6 +257,80 @@ def test_service_preferences_migration_rejects_already_migrated_source(tmp_path:
     monkeypatch.setenv("AUDIT_KEY_V1", DATA_KEY)
     with pytest.raises(Exception, match="source schema is incompatible|target schema is incompatible"):
         _script_module("migrate_service_preferences").migrate(source, target)
+
+
+
+def _pre_api_keys_source(path: Path) -> None:
+    schema = _script_module("api_keys_schema").PRE_API_KEYS_SCHEMA
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(schema)
+        stamp = "2026-01-01T00:00:00Z"
+        conn.execute("INSERT INTO services (id, name) VALUES (9, 'Mail')")
+        conn.execute(
+            "INSERT INTO accounts (id, email, password_ciphertext, password_nonce, password_key_version, password_changed_at) VALUES (3, 'a@example.test', ?, ?, 1, ?)",
+            (b"cipher", b"0" * 12, stamp),
+        )
+        conn.execute("INSERT INTO account_service (account_id, service_id, status, registered) VALUES (3, 9, 'ativo', 1)")
+        conn.execute(
+            "INSERT INTO users (id, username, password_hash, role, is_active, must_change_password, created_at, updated_at, password_changed_at, session_version) VALUES (1, 'admin', 'hash', 'admin', 1, 0, ?, ?, ?, 0)",
+            (stamp, stamp, stamp),
+        )
+        conn.execute("INSERT INTO user_service_preferences (user_id, service_id, position, is_initial) VALUES (1, 9, 0, 1)")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_api_keys_migration_api_and_preservation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    migration = _script_module("migrate_api_keys")
+    assert list(inspect.signature(migration.migrate).parameters) == ["source_path", "target_path", "audit_key_env"]
+    assert inspect.signature(migration.migrate).parameters["audit_key_env"].default == "AUDIT_KEY_V1"
+    source = tmp_path / "pre-api-keys.db"
+    target = tmp_path / "current.db"
+    _pre_api_keys_source(source)
+    source_conn = sqlite3.connect(source)
+    old_tables = {
+        row[0]
+        for row in source_conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+    }
+    expected_rows = {table: _table_rows(source_conn, table) for table in old_tables}
+    expected_sequences = _table_rows(source_conn, "sqlite_sequence")
+    source_conn.close()
+    monkeypatch.setenv("AUDIT_KEY_V1", DATA_KEY)
+    migration.migrate(source, target)
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    conn = sqlite3.connect(target)
+    try:
+        assert {table: _table_rows(conn, table) for table in old_tables} == expected_rows
+        assert _table_rows(conn, "sqlite_sequence") == expected_sequences
+        assert conn.execute("SELECT COUNT(*) FROM api_keys").fetchone()[0] == 0
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert list(conn.execute("PRAGMA foreign_key_check")) == []
+        from service_manager.db import schema_is_current
+        assert schema_is_current(conn)
+    finally:
+        conn.close()
+
+    result = _run(
+        API_KEYS_MIGRATE,
+        "--source", str(source),
+        "--target", str(tmp_path / "cli-current.db"),
+        env={"AUDIT_KEY_V1": DATA_KEY},
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "OK: api keys schema migrated"
+
+
+def test_api_keys_migration_rejects_already_migrated_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source = tmp_path / "current.db"
+    target = tmp_path / "other.db"
+    conn = sqlite3.connect(source)
+    conn.executescript(_script_module("migrate_api_keys").TARGET_SCHEMA)
+    conn.close()
+    monkeypatch.setenv("AUDIT_KEY_V1", DATA_KEY)
+    with pytest.raises(Exception, match="source schema is incompatible|target schema is incompatible"):
+        _script_module("migrate_api_keys").migrate(source, target)
 
 
 def test_auth_schema_migration_snapshots_wal_and_preserves_every_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

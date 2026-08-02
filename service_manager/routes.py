@@ -14,7 +14,7 @@ from collections.abc import Iterator, Mapping
 from typing import Any
 from itsdangerous import BadSignature, URLSafeSerializer
 
-from service_manager.auth import consume_reveal_allowance, normalize_email, now_text, source_ip
+from service_manager.auth import normalize_email, now_text, source_ip
 from flask import Blueprint, Response, abort, current_app, g, jsonify, redirect, render_template, request, send_file, url_for
 from flask.typing import ResponseReturnValue
 from service_manager.audit import append_audit_event, verify_audit_chain
@@ -33,13 +33,44 @@ from service_manager.authorization import (
     require_service_role,
     SERVICE_ROLE_RANK,
 )
+from service_manager.operations import (
+    DomainError,
+    NotFoundError,
+    bulk_create_field,
+    bulk_delete_accounts,
+    bulk_set_field,
+    bulk_update_registered,
+    bulk_update_status,
+    complete_rotation as op_complete_rotation,
+    create_account,
+    create_api_key,
+    create_service,
+    create_webhook,
+    delete_account,
+    delete_field_value,
+    delete_service,
+    delete_webhook,
+    grant_membership,
+    import_accounts,
+    list_api_keys,
+    principal_from_user,
+    reveal_account_password,
+    revoke_api_key,
+    revoke_membership,
+    set_account_rotation_policy,
+    set_rotation_enabled_setting,
+    set_service_rotation_policy,
+    test_webhook,
+    update_account,
+    update_account_registered,
+    update_account_status,
+    update_field_value,
+    update_service_preferences,
+    update_webhook,
+    upsert_field_values,
+)
 from service_manager.webhooks import (
-    WebhookError,
-    create_webhook_config,
-    delete_webhook_config,
-    enqueue_webhook_event,
     list_webhook_configs,
-    update_webhook_config,
     webhook_event_types,
 )
 
@@ -212,6 +243,10 @@ def _webhook_resolver():
 def _audit_actor() -> int | None:
     user = getattr(g, "current_user", None)
     return user["id"] if user is not None else None
+
+
+def _principal():
+    return principal_from_user(g.current_user)
 
 
 def _audit(conn, *, action: str, target_type: str, target_id: int | str | None = None, metadata: Mapping[str, object] | None = None) -> int:
@@ -450,8 +485,24 @@ def _due_state(days_remaining: int) -> str:
         return "due_soon"
     return "current"
 
+def _actor_label(username: str | None, metadata_json: str | None) -> str:
+    if username:
+        return username
+    if metadata_json:
+        try:
+            import json
+            metadata = json.loads(metadata_json)
+        except (TypeError, ValueError):
+            metadata = None
+        if isinstance(metadata, dict):
+            name = metadata.get("api_key_name")
+            if isinstance(name, str) and name:
+                return f"api:{name}"
+    return "sistema"
+
+
 def _audit_query_filters() -> tuple[str, list[object], dict[str, str]]:
-    filters = {name: (request.args.get(name) or "").strip() for name in ("action", "target_type", "actor", "since", "until", "source_ip")}
+    filters = {name: (request.args.get(name) or "").strip() for name in ("action", "target_type", "actor", "api_key", "since", "until", "source_ip")}
     clauses: list[str] = []
     params: list[object] = []
     if filters["action"]:
@@ -470,6 +521,16 @@ def _audit_query_filters() -> tuple[str, list[object], dict[str, str]]:
             params.append(actor)
         else:
             filters["actor"] = ""
+    if filters["api_key"]:
+        try:
+            api_key_id = int(filters["api_key"])
+        except ValueError:
+            api_key_id = 0
+        if api_key_id > 0:
+            clauses.append("e.metadata_json LIKE ?")
+            params.append(f'%"api_key_id": {api_key_id}%')
+        else:
+            filters["api_key"] = ""
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", filters["since"]):
         try:
             since = date.fromisoformat(filters["since"])
@@ -518,8 +579,22 @@ def audit_view() -> ResponseReturnValue:
         """,
         (*params, (page - 1) * 50),
     ).fetchall()
+    events = [
+        {
+            "id": row["id"],
+            "occurred_at": row["occurred_at"],
+            "action": row["action"],
+            "target_type": row["target_type"],
+            "target_id": row["target_id"],
+            "metadata_json": row["metadata_json"],
+            "source_ip": row["source_ip"],
+            "username": row["username"],
+            "actor_label": _actor_label(row["username"], row["metadata_json"]),
+        }
+        for row in rows[:50]
+    ]
     return Response(
-        render_template("audit.html", events=rows[:50], page=page, has_next=len(rows) > 50, filters=filters, chain_healthy=verify_audit_chain(conn)),
+        render_template("audit.html", events=events, page=page, has_next=len(rows) > 50, filters=filters, chain_healthy=verify_audit_chain(conn)),
         headers={"Cache-Control": "no-store, private"},
     )
 
@@ -557,6 +632,7 @@ def audit_csv() -> ResponseReturnValue:
         _flush()
         for row in cursor:
             values = list(row)
+            values[2] = _actor_label(row["username"], row["metadata_json"])
             # Hash BLOBs must export as 64 lowercase hex chars, never Python bytes repr.
             values[8] = row["previous_hash"].hex() if row["previous_hash"] is not None else ""
             values[9] = row["event_hash"].hex() if row["event_hash"] is not None else ""
@@ -724,21 +800,6 @@ def encrypted_field_value(account_id: int, field_id: int, value: str) -> tuple[b
     return encrypted.ciphertext, encrypted.nonce, encrypted.key_version
 
 
-def _resolve_import_field_ids(conn, service_id: int, field_names: tuple[str, ...]) -> list[int]:
-    existing = {
-        row["name"]: row["id"]
-        for row in conn.execute("SELECT id, name FROM custom_fields WHERE service_id=?", (service_id,))
-    }
-    field_ids: list[int] = []
-    for name in field_names:
-        field_id = existing.get(name)
-        if field_id is None:
-            field_id = inserted_id(conn.execute(
-                "INSERT INTO custom_fields (service_id, name) VALUES (?, ?)", (service_id, name)
-            ))
-            existing[name] = field_id
-        field_ids.append(field_id)
-    return field_ids
 
 
 def _related_account(conn, service_id: int | None, account_id: int) -> None:
@@ -805,13 +866,12 @@ def service_preferences_update() -> Response:
                 raise _InvalidServicePreferences
             if initial_service_id is not None and initial_service_id not in service_ids:
                 raise _InvalidServicePreferences
-            replace_service_preferences(conn, g.current_user["id"], service_ids, initial_service_id)
-            _audit(
+            update_service_preferences(
                 conn,
-                action="preferences.services_updated",
-                target_type="user",
-                target_id=g.current_user["id"],
-                metadata={"service_count": len(service_ids), "initial_service_id": initial_service_id},
+                _principal(),
+                user_id=g.current_user["id"],
+                service_ids=service_ids,
+                initial_service_id=initial_service_id,
             )
     except _InvalidServicePreferences:
         return Response("Preferências de serviços inválidas", status=400)
@@ -912,6 +972,7 @@ def index() -> str:
             params["cur_e"] = cur["e"]
             params["cur_id"] = cur["id"]
             if sort == "status":
+                assert isinstance(st, str)
                 params["cur_rank"] = STATUS_ORDER[st]
             params["limit"] = limit
             sql = f"{_ACCOUNT_SELECT} WHERE {filter_sql} AND {_account_keyset_sql(sort, op)} ORDER BY {_account_order_sql(sort, sql_dir)} LIMIT :limit"
@@ -1093,21 +1154,18 @@ def add() -> ResponseReturnValue:
         return _form_error("Conta inválida")
     try:
         with transaction(conn):
-            now = now_text()
-            account_id = inserted_id(conn.execute(
-                "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version, password_changed_at) VALUES (?, ?, ?, ?, ?)",
-                (email, b"", b"0" * 12, 1, now),
-            ))
-            conn.execute(
-                "UPDATE accounts SET password_ciphertext = ?, password_nonce = ?, password_key_version = ? WHERE id = ?",
-                (*encrypted_account_password(account_id, password), account_id),
+            create_account(
+                conn,
+                _principal(),
+                service_id=service_id,
+                email=email,
+                password=password,
+                status=status,
+                registered=registered,
             )
-            link_all_services(conn, account_id, service_id, status, registered)
-            _audit(conn, action="account.created", target_type="account", target_id=account_id, metadata={"service_id": service_id})
-    except Exception as error:
-        if "UNIQUE" in str(error).upper():
-            return _form_error("Email já cadastrado")
-        raise
+    except DomainError as error:
+        # HTML/form contract keeps 400 for validation and uniqueness conflicts.
+        return _form_error(error.message, status=400)
     return redirect(url_for("routes.index", service=service_id, ok="account_added"))
 
 
@@ -1248,35 +1306,15 @@ def import_bulk() -> ResponseReturnValue:
     if any(_valid_name(name) is None for name in field_names):
         return redirect(url_for("routes.index", service=service_id, error="validation"))
 
-    added = skipped = 0
     try:
         with transaction(conn):
-            changed_at = now_text()
-            emails = {row["email"].casefold() for row in conn.execute("SELECT email FROM accounts")}
-            field_ids: list[int] | None = None
-            for email, password, status, field_values in normalized_records:
-                if email.casefold() in emails:
-                    skipped += 1
-                    continue
-                emails.add(email.casefold())
-                if field_ids is None:
-                    field_ids = _resolve_import_field_ids(conn, service_id, field_names)
-                account_id = inserted_id(conn.execute(
-                    "INSERT INTO accounts (email, password_ciphertext, password_nonce, password_key_version, password_changed_at) VALUES (?, ?, ?, ?, ?)",
-                    (email, b"", b"0" * 12, 1, changed_at),
-                ))
-                conn.execute(
-                    "UPDATE accounts SET password_ciphertext=?, password_nonce=?, password_key_version=? WHERE id=?",
-                    (*encrypted_account_password(account_id, password), account_id),
-                )
-                link_all_services(conn, account_id, service_id, status)
-                for field_id, value in zip(field_ids, field_values, strict=True):
-                    conn.execute(
-                        "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?)",
-                        (field_id, account_id, *encrypted_field_value(account_id, field_id, value)),
-                    )
-                added += 1
-            _audit(conn, action="accounts.imported", target_type="service", target_id=service_id, metadata={"added": added, "skipped": skipped})
+            added, skipped = import_accounts(
+                conn,
+                _principal(),
+                service_id=service_id,
+                records=normalized_records,
+                field_names=field_names,
+            )
     except Exception:
         current_app.logger.exception("import transaction failed")
         return redirect(url_for("routes.index", service=service_id, error="validation"))
@@ -1295,21 +1333,16 @@ def update(item_id: int) -> ResponseReturnValue:
         return _form_error("Conta inválida")
     try:
         with transaction(conn):
-            if password:
-                conn.execute(
-                    "UPDATE accounts SET email=?, password_ciphertext=?, password_nonce=?, password_key_version=?, password_changed_at=? WHERE id=?",
-                    (email, *encrypted_account_password(item_id, password), now_text(), item_id),
-                )
-                # A real password change clears every service link's explicit due-date override.
-                conn.execute("UPDATE account_service SET rotation_due_at=NULL WHERE account_id=?", (item_id,))
-                _audit(conn, action="account.updated", target_type="account", target_id=item_id, metadata={"service_id": service_id, "password_changed": True})
-            else:
-                conn.execute("UPDATE accounts SET email=? WHERE id=?", (email, item_id))
-                _audit(conn, action="account.updated", target_type="account", target_id=item_id, metadata={"service_id": service_id, "password_changed": False})
-    except Exception as error:
-        if "UNIQUE" in str(error).upper():
-            return _form_error("Email já cadastrado")
-        raise
+            update_account(
+                conn,
+                _principal(),
+                account_id=item_id,
+                service_id=service_id,
+                email=email,
+                password=password,
+            )
+    except DomainError as error:
+        return _form_error(error.message, status=400)
     return redirect(url_for("routes.index", service=service_id, ok="account_updated"))
 
 
@@ -1322,8 +1355,7 @@ def update_status(item_id: int) -> ResponseReturnValue:
     if status is None:
         return _form_error("Status inválido")
     with transaction(conn):
-        conn.execute("UPDATE account_service SET status=? WHERE account_id=? AND service_id=?", (status, item_id, service_id))
-        _audit(conn, action="account.status_updated", target_type="account", target_id=item_id, metadata={"service_id": service_id})
+        update_account_status(conn, _principal(), account_id=item_id, service_id=service_id, status=status)
     return redirect(url_for("routes.index", service=service_id, ok="status_updated"))
 
 
@@ -1337,8 +1369,7 @@ def update_registered(item_id: int) -> ResponseReturnValue:
         return _form_error("Cadastro inválido")
     registered = int(raw)
     with transaction(conn):
-        conn.execute("UPDATE account_service SET registered=? WHERE account_id=? AND service_id=?", (registered, item_id, service_id))
-        _audit(conn, action="account.registered_updated", target_type="account", target_id=item_id, metadata={"service_id": service_id, "registered": registered})
+        update_account_registered(conn, _principal(), account_id=item_id, service_id=service_id, registered=registered)
     return redirect(url_for("routes.index", service=service_id, ok="registered_updated"))
 
 @routes.post("/service/<int:service_id>/rotation-policy")
@@ -1352,8 +1383,7 @@ def service_rotation_policy(service_id: int) -> ResponseReturnValue:
     if not ok:
         return _form_error("Intervalo inválido")
     with transaction(conn):
-        conn.execute("UPDATE services SET rotation_days=? WHERE id=?", (days, service_id))
-        _audit(conn, action="rotation.policy_updated", target_type="service", target_id=service_id, metadata={"service_id": service_id, "rotation_days": days, "rotation_due_at": None})
+        set_service_rotation_policy(conn, _principal(), service_id=service_id, rotation_days=days)
     return redirect(url_for("routes.index", service=service_id, ok="rotation_policy_updated"))
 
 
@@ -1368,11 +1398,14 @@ def account_rotation_policy(account_id: int) -> ResponseReturnValue:
     if not days_ok or not due_ok:
         return _form_error("Política de rotação inválida")
     with transaction(conn):
-        conn.execute(
-            "UPDATE account_service SET rotation_days=?, rotation_due_at=? WHERE account_id=? AND service_id=?",
-            (days, due_at, account_id, service_id),
+        set_account_rotation_policy(
+            conn,
+            _principal(),
+            account_id=account_id,
+            service_id=service_id,
+            rotation_days=days,
+            rotation_due_at=due_at,
         )
-        _audit(conn, action="rotation.policy_updated", target_type="account", target_id=account_id, metadata={"service_id": service_id, "rotation_days": days, "rotation_due_at": due_at})
     return redirect(url_for("routes.index", service=service_id, ok="rotation_policy_updated"))
 
 
@@ -1425,23 +1458,23 @@ def complete_rotation(account_id: int) -> ResponseReturnValue:
     outcome = request.form.get("outcome", "")
     if outcome not in ("completed", "incomplete"):
         return _form_error("Resultado inválido")
-    if outcome == "incomplete":
-        with transaction(conn):
-            _audit(conn, action="rotation.incomplete_marked", target_type="account", target_id=account_id, metadata={"service_id": service_id})
-        return redirect(url_for("routes.rotation_view", service=service_id, ok="rotation_incomplete"))
-    new_password = _valid_secret(request.form.get("new_password", ""))
-    if not new_password:
+    new_password = _valid_secret(request.form.get("new_password", "")) if outcome == "completed" else None
+    if outcome == "completed" and not new_password:
         return _form_error("Nova senha obrigatória")
-    now = now_text()
-    with transaction(conn):
-        conn.execute(
-            "UPDATE accounts SET password_ciphertext=?, password_nonce=?, password_key_version=?, password_changed_at=? WHERE id=?",
-            (*encrypted_account_password(account_id, new_password), now, account_id),
-        )
-        # Clearing every link's explicit due override restarts each service from its effective interval.
-        conn.execute("UPDATE account_service SET rotation_due_at=NULL WHERE account_id=?", (account_id,))
-        _audit(conn, action="rotation.completed", target_type="account", target_id=account_id, metadata={"service_id": service_id})
-    return redirect(url_for("routes.rotation_view", service=service_id, ok="rotation_completed"))
+    try:
+        with transaction(conn):
+            op_complete_rotation(
+                conn,
+                _principal(),
+                account_id=account_id,
+                service_id=service_id,
+                outcome=outcome,
+                new_password=new_password,
+            )
+    except DomainError as error:
+        return _form_error(error.message, status=400)
+    ok = "rotation_incomplete" if outcome == "incomplete" else "rotation_completed"
+    return redirect(url_for("routes.rotation_view", service=service_id, ok=ok))
 
 
 def _bulk_account_ids() -> list[int] | Response:
@@ -1469,13 +1502,8 @@ def bulk_status() -> ResponseReturnValue:
     if status is None:
         return _form_error("Status inválido")
     require_accounts_role(conn, account_ids, service_id, "editor")
-    placeholders = ",".join("?" for _ in account_ids)
     with transaction(conn):
-        conn.execute(
-            f"UPDATE account_service SET status=? WHERE service_id=? AND account_id IN ({placeholders})",
-            (status, service_id, *account_ids),
-        )
-        _audit(conn, action="accounts.bulk_status", target_type="service", target_id=service_id, metadata={"count": len(account_ids), "status": status})
+        bulk_update_status(conn, _principal(), service_id=service_id, account_ids=account_ids, status=status)
     return redirect(url_for("routes.index", service=service_id, ok="bulk_updated"))
 
 
@@ -1491,13 +1519,8 @@ def bulk_registered() -> ResponseReturnValue:
         return _form_error("Cadastro inválido")
     registered = int(raw)
     require_accounts_role(conn, account_ids, service_id, "editor")
-    placeholders = ",".join("?" for _ in account_ids)
     with transaction(conn):
-        conn.execute(
-            f"UPDATE account_service SET registered=? WHERE service_id=? AND account_id IN ({placeholders})",
-            (registered, service_id, *account_ids),
-        )
-        _audit(conn, action="accounts.bulk_registered", target_type="service", target_id=service_id, metadata={"count": len(account_ids), "registered": registered})
+        bulk_update_registered(conn, _principal(), service_id=service_id, account_ids=account_ids, registered=registered)
     return redirect(url_for("routes.index", service=service_id, ok="bulk_updated"))
 
 
@@ -1515,17 +1538,21 @@ def bulk_field() -> ResponseReturnValue:
     value = _valid_secret(request.form.get("field_value", ""))
     if field_id <= 0 or value is None or not value:
         return _form_error("Campo inválido")
-    if conn.execute("SELECT 1 FROM custom_fields WHERE id=? AND service_id=?", (field_id, service_id)).fetchone() is None:
-        abort(404)
     require_accounts_role(conn, account_ids, service_id, "editor")
-    with transaction(conn):
-        for account_id in account_ids:
-            encrypted = encrypted_field_value(account_id, field_id, value)
-            conn.execute(
-                "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?) ON CONFLICT(field_id, account_id) DO UPDATE SET value_ciphertext=excluded.value_ciphertext, value_nonce=excluded.value_nonce, value_key_version=excluded.value_key_version",
-                (field_id, account_id, *encrypted),
+    try:
+        with transaction(conn):
+            bulk_set_field(
+                conn,
+                _principal(),
+                service_id=service_id,
+                account_ids=account_ids,
+                field_id=field_id,
+                value=value,
             )
-        _audit(conn, action="accounts.bulk_field", target_type="service", target_id=service_id, metadata={"count": len(account_ids), "field_id": field_id})
+    except NotFoundError:
+        abort(404)
+    except DomainError as error:
+        return _form_error(error.message, status=400)
     return redirect(url_for("routes.index", service=service_id, ok="bulk_updated"))
 
 
@@ -1540,28 +1567,8 @@ def bulk_field_add() -> ResponseReturnValue:
     if name is None:
         return _form_error("Campo inválido")
     require_accounts_role(conn, account_ids, service_id, "editor")
-    placeholders = ",".join("?" for _ in account_ids)
     with transaction(conn):
-        field = conn.execute("SELECT id FROM custom_fields WHERE service_id=? AND name=?", (service_id, name)).fetchone()
-        field_id = field["id"] if field else inserted_id(conn.execute(
-            "INSERT INTO custom_fields (service_id, name) VALUES (?, ?)", (service_id, name)
-        ))
-        existing = {
-            row["account_id"]
-            for row in conn.execute(
-                f"SELECT account_id FROM field_values WHERE field_id=? AND account_id IN ({placeholders})",
-                (field_id, *account_ids),
-            )
-        }
-        missing_account_ids = [account_id for account_id in account_ids if account_id not in existing]
-        for account_id in missing_account_ids:
-            encrypted = encrypted_field_value(account_id, field_id, "")
-            conn.execute(
-                "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?) ON CONFLICT(field_id, account_id) DO NOTHING",
-                (field_id, account_id, *encrypted),
-            )
-        created_count = len(missing_account_ids)
-        _audit(conn, action="accounts.bulk_field_created", target_type="service", target_id=service_id, metadata={"count": len(account_ids), "created_count": created_count, "field_id": field_id})
+        bulk_create_field(conn, _principal(), service_id=service_id, account_ids=account_ids, name=name)
     return redirect(url_for("routes.index", service=service_id, ok="bulk_field_created"))
 
 
@@ -1575,11 +1582,8 @@ def bulk_delete() -> ResponseReturnValue:
     if request.form.get("confirmation_count", "") != str(len(account_ids)):
         return _form_error("Confirmação inválida")
     require_accounts_role(conn, account_ids, service_id, "service_admin", all_linked_services=True)
-    placeholders = ",".join("?" for _ in account_ids)
     with transaction(conn):
-        conn.execute(f"DELETE FROM accounts WHERE id IN ({placeholders})", account_ids)
-        _audit(conn, action="accounts.bulk_deleted", target_type="service", target_id=service_id, metadata={"count": len(account_ids), "service_id": service_id})
-        enqueue_webhook_event(conn, "destructive_admin_action", {"action": "accounts.bulk_deleted", "target_type": "service", "target_id": service_id, "service_id": service_id, "count": len(account_ids)})
+        bulk_delete_accounts(conn, _principal(), service_id=service_id, account_ids=account_ids)
     return redirect(url_for("routes.index", service=service_id, ok="bulk_deleted"))
 
 @routes.post("/delete/<int:item_id>")
@@ -1588,9 +1592,7 @@ def delete(item_id: int) -> ResponseReturnValue:
     service_id = required_service_id()
     require_account_role(conn, item_id, service_id, "service_admin", all_linked_services=True)
     with transaction(conn):
-        conn.execute("DELETE FROM accounts WHERE id = ?", (item_id,))
-        _audit(conn, action="account.deleted", target_type="account", target_id=item_id, metadata={"service_id": service_id})
-        enqueue_webhook_event(conn, "destructive_admin_action", {"action": "account.deleted", "target_type": "account", "target_id": item_id, "service_id": service_id})
+        delete_account(conn, _principal(), account_id=item_id, service_id=service_id)
     return redirect(url_for("routes.index", service=service_id, ok="account_deleted"))
 
 
@@ -1602,16 +1604,7 @@ def service_add() -> ResponseReturnValue:
         return _form_error("Serviço inválido")
     conn = get_db()
     with transaction(conn):
-        existing = conn.execute("SELECT id FROM services WHERE name=?", (name,)).fetchone()
-        if existing is None:
-            service_id = inserted_id(conn.execute("INSERT INTO services (name) VALUES (?)", (name,)))
-            conn.execute(
-                "INSERT INTO account_service (account_id, service_id, status) SELECT id, ?, 'nunca' FROM accounts",
-                (service_id,),
-            )
-            _audit(conn, action="service.created", target_type="service", target_id=service_id)
-        else:
-            service_id = existing["id"]
+        service_id = create_service(conn, _principal(), name)
     return redirect(url_for("routes.index", ok="service_added", service=service_id))
 
 
@@ -1619,12 +1612,11 @@ def service_add() -> ResponseReturnValue:
 @require_role("admin")
 def service_delete(service_id: int) -> ResponseReturnValue:
     conn = get_db()
-    with transaction(conn):
-        if conn.execute("SELECT 1 FROM services WHERE id=?", (service_id,)).fetchone() is None:
-            abort(404)
-        conn.execute("DELETE FROM services WHERE id = ?", (service_id,))
-        _audit(conn, action="service.deleted", target_type="service", target_id=service_id)
-        enqueue_webhook_event(conn, "destructive_admin_action", {"action": "service.deleted", "target_type": "service", "target_id": service_id, "service_id": service_id})
+    try:
+        with transaction(conn):
+            delete_service(conn, _principal(), service_id)
+    except NotFoundError:
+        abort(404)
     return redirect(url_for("routes.index", ok="service_deleted"))
 
 
@@ -1643,18 +1635,18 @@ def field_add() -> ResponseReturnValue:
         return _form_error("Campo inválido")
     for account_id in account_ids:
         require_account_role(conn, account_id, service_id, "editor")
-    with transaction(conn):
-        field = conn.execute("SELECT id FROM custom_fields WHERE service_id=? AND name=?", (service_id, name)).fetchone()
-        field_id = field["id"] if field else inserted_id(conn.execute(
-            "INSERT INTO custom_fields (service_id, name) VALUES (?, ?)", (service_id, name)
-        ))
-        for account_id in account_ids:
-            encrypted = encrypted_field_value(account_id, field_id, value)
-            conn.execute(
-                "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?) ON CONFLICT(field_id, account_id) DO UPDATE SET value_ciphertext=excluded.value_ciphertext, value_nonce=excluded.value_nonce, value_key_version=excluded.value_key_version",
-                (field_id, account_id, *encrypted),
+    try:
+        with transaction(conn):
+            upsert_field_values(
+                conn,
+                _principal(),
+                service_id=service_id,
+                name=name,
+                account_ids=account_ids,
+                value=value,
             )
-        _audit(conn, action="field.created", target_type="field", target_id=field_id, metadata={"service_id": service_id, "accounts": len(account_ids)})
+    except DomainError as error:
+        return _form_error(error.message, status=400)
     return redirect(url_for("routes.index", service=service_id, ok="field_added", _anchor=f"row-{account_ids[0]}"))
 
 
@@ -1667,16 +1659,20 @@ def field_update(field_id: int, account_id: int) -> ResponseReturnValue:
     value = _valid_secret(request.form.get("value", ""))
     if value is None:
         return _form_error("Campo inválido")
-    with transaction(conn):
-        field = conn.execute("SELECT id FROM custom_fields WHERE id=? AND service_id=?", (field_id, service_id)).fetchone()
-        if field is None:
-            abort(404)
-        encrypted = encrypted_field_value(account_id, field_id, value)
-        conn.execute(
-            "INSERT INTO field_values (field_id, account_id, value_ciphertext, value_nonce, value_key_version) VALUES (?, ?, ?, ?, ?) ON CONFLICT(field_id, account_id) DO UPDATE SET value_ciphertext=excluded.value_ciphertext, value_nonce=excluded.value_nonce, value_key_version=excluded.value_key_version",
-            (field_id, account_id, *encrypted),
-        )
-        _audit(conn, action="field.updated", target_type="field_value", target_id=f"{field_id}:{account_id}", metadata={"service_id": service_id})
+    try:
+        with transaction(conn):
+            update_field_value(
+                conn,
+                _principal(),
+                service_id=service_id,
+                field_id=field_id,
+                account_id=account_id,
+                value=value,
+            )
+    except NotFoundError:
+        abort(404)
+    except DomainError as error:
+        return _form_error(error.message, status=400)
     return redirect(url_for("routes.index", service=service_id, ok="field_saved", _anchor=f"row-{account_id}"))
 
 
@@ -1687,11 +1683,13 @@ def field_delete(field_id: int, account_id: int) -> ResponseReturnValue:
     _related_field_account(conn, service_id, field_id, account_id)
     require_account_role(conn, account_id, service_id, "service_admin")
     with transaction(conn):
-        conn.execute("DELETE FROM field_values WHERE field_id=? AND account_id=?", (field_id, account_id))
-        if not conn.execute("SELECT 1 FROM field_values WHERE field_id=?", (field_id,)).fetchone():
-            conn.execute("DELETE FROM custom_fields WHERE id=?", (field_id,))
-        _audit(conn, action="field.deleted", target_type="field_value", target_id=f"{field_id}:{account_id}", metadata={"service_id": service_id})
-        enqueue_webhook_event(conn, "destructive_admin_action", {"action": "field.deleted", "target_type": "field_value", "target_id": f"{field_id}:{account_id}", "service_id": service_id})
+        delete_field_value(
+            conn,
+            _principal(),
+            service_id=service_id,
+            field_id=field_id,
+            account_id=account_id,
+        )
     return redirect(url_for("routes.index", service=service_id, ok="field_deleted", _anchor=f"row-{account_id}"))
 
 
@@ -1701,19 +1699,22 @@ def reveal_password(account_id: int) -> ResponseReturnValue:
     conn = get_db()
     service_id = required_query_service_id()
     require_account_role(conn, account_id, service_id, "editor")
-    with transaction(conn):
-        if not consume_reveal_allowance(conn, user_id=user["id"], ip=source_ip()):
-            return Response("Muitas tentativas", status=429)
-        row = conn.execute(
-            "SELECT password_ciphertext, password_nonce, password_key_version FROM accounts WHERE id=?", (account_id,)
-        ).fetchone()
-        if row is None:
+    try:
+        with transaction(conn):
+            value = reveal_account_password(
+                conn,
+                _principal(),
+                account_id=account_id,
+                subject=str(user["id"]),
+                source_ip=source_ip(),
+                actor_user_id_for_webhook=int(user["id"]),
+            )
+    except DomainError as error:
+        if error.status == 429:
+            return Response(error.message, status=429)
+        if error.status == 404:
             abort(404)
-        value = decrypt_secret(
-            EncryptedValue(row["password_ciphertext"], row["password_nonce"], row["password_key_version"]),
-            aad=account_password_aad(account_id),
-        )
-        _audit(conn, action="secret.revealed", target_type="account_password", target_id=account_id)
+        return Response(error.message, status=error.status)
     response = jsonify(value=value, expires_in=30)
     response.headers["Cache-Control"] = "no-store, private"
     return response
@@ -1743,23 +1744,13 @@ def service_access_grant(service_id: int, user_id: int) -> ResponseReturnValue:
     if role not in SERVICE_ROLE_RANK:
         return Response("Papel inválido", status=400)
     conn = get_db()
-    with transaction(conn):
-        service = conn.execute("SELECT 1 FROM services WHERE id=?", (service_id,)).fetchone()
-        target = conn.execute("SELECT role, is_active FROM users WHERE id=?", (user_id,)).fetchone()
-        if service is None or target is None:
-            abort(404)
-        if target["role"] == "admin" or not target["is_active"]:
-            return Response("Usuário inválido", status=400)
-        existing = conn.execute("SELECT role FROM service_members WHERE user_id=? AND service_id=?", (user_id, service_id)).fetchone()
-        if existing is None:
-            conn.execute(
-                "INSERT INTO service_members (user_id, service_id, role, created_at) VALUES (?, ?, ?, ?)",
-                (user_id, service_id, role, now_text()),
-            )
-            _audit(conn, action="membership.granted", target_type="service", target_id=service_id, metadata={"user_id": user_id, "role": role})
-        else:
-            conn.execute("UPDATE service_members SET role=? WHERE user_id=? AND service_id=?", (role, user_id, service_id))
-            _audit(conn, action="membership.role_changed", target_type="service", target_id=service_id, metadata={"user_id": user_id, "role": role})
+    try:
+        with transaction(conn):
+            grant_membership(conn, _principal(), service_id=service_id, user_id=user_id, role=role)
+    except NotFoundError:
+        abort(404)
+    except DomainError as error:
+        return Response(error.message, status=400)
     return Response(status=204)
 
 
@@ -1768,14 +1759,11 @@ def service_access_grant(service_id: int, user_id: int) -> ResponseReturnValue:
 def service_access_revoke(service_id: int, user_id: int) -> ResponseReturnValue:
     require_recent_reauth()
     conn = get_db()
-    with transaction(conn):
-        existing = conn.execute("SELECT 1 FROM service_members WHERE user_id=? AND service_id=?", (user_id, service_id)).fetchone()
-        if existing is None:
-            abort(404)
-        conn.execute("DELETE FROM service_members WHERE user_id=? AND service_id=?", (user_id, service_id))
-        conn.execute("DELETE FROM user_service_preferences WHERE user_id=? AND service_id=?", (user_id, service_id))
-        _audit(conn, action="membership.revoked", target_type="service", target_id=service_id, metadata={"user_id": user_id})
-        enqueue_webhook_event(conn, "destructive_admin_action", {"action": "membership.revoked", "target_type": "service", "target_id": service_id, "service_id": service_id, "user_id": user_id})
+    try:
+        with transaction(conn):
+            revoke_membership(conn, _principal(), service_id=service_id, user_id=user_id)
+    except NotFoundError:
+        abort(404)
     return Response(status=204)
 
 
@@ -1811,8 +1799,9 @@ def security_integration_create() -> ResponseReturnValue:
     conn = get_db()
     try:
         with transaction(conn):
-            config_id, host, secret, subscriptions = create_webhook_config(
+            config_id, host, secret, subscriptions = create_webhook(
                 conn,
+                _principal(),
                 url=url,
                 description=description,
                 enabled=enabled,
@@ -1820,14 +1809,7 @@ def security_integration_create() -> ResponseReturnValue:
                 data_key_b64=current_app.config["DATA_KEY_V1"],
                 resolver=_webhook_resolver(),
             )
-            _audit(
-                conn,
-                action="webhook.created",
-                target_type="webhook",
-                target_id=config_id,
-                metadata={"destination_host": host, "enabled": enabled, "subscriptions": ",".join(subscriptions)},
-            )
-    except WebhookError:
+    except DomainError:
         return Response("Integração inválida", status=400)
     return Response(
         jsonify({"id": config_id, "signing_secret": secret}).get_data(as_text=True),
@@ -1844,9 +1826,10 @@ def security_integration_update(config_id: int) -> ResponseReturnValue:
     conn = get_db()
     try:
         with transaction(conn):
-            host, subscriptions = update_webhook_config(
+            update_webhook(
                 conn,
-                config_id,
+                _principal(),
+                config_id=config_id,
                 url=url,
                 description=description,
                 enabled=enabled,
@@ -1854,16 +1837,9 @@ def security_integration_update(config_id: int) -> ResponseReturnValue:
                 data_key_b64=current_app.config["DATA_KEY_V1"],
                 resolver=_webhook_resolver(),
             )
-            _audit(
-                conn,
-                action="webhook.updated",
-                target_type="webhook",
-                target_id=config_id,
-                metadata={"destination_host": host, "enabled": enabled, "subscriptions": ",".join(subscriptions)},
-            )
-    except WebhookError as error:
-        if str(error) == "unknown config":
-            abort(404)
+    except NotFoundError:
+        abort(404)
+    except DomainError:
         return Response("Integração inválida", status=400)
     return Response(status=204)
 
@@ -1875,15 +1851,8 @@ def security_integration_delete(config_id: int) -> ResponseReturnValue:
     conn = get_db()
     try:
         with transaction(conn):
-            host = delete_webhook_config(conn, config_id)
-            _audit(
-                conn,
-                action="webhook.deleted",
-                target_type="webhook",
-                target_id=config_id,
-                metadata={"destination_host": host, "enabled": False},
-            )
-    except WebhookError:
+            delete_webhook(conn, _principal(), config_id=config_id)
+    except NotFoundError:
         abort(404)
     return Response(status=204)
 
@@ -1893,21 +1862,11 @@ def security_integration_delete(config_id: int) -> ResponseReturnValue:
 def security_integration_test(config_id: int) -> ResponseReturnValue:
     require_recent_reauth()
     conn = get_db()
-    with transaction(conn):
-        config = conn.execute(
-            "SELECT destination_host, enabled FROM webhook_configs WHERE id=? AND deleted_at IS NULL",
-            (config_id,),
-        ).fetchone()
-        if config is None:
-            abort(404)
-        enqueue_webhook_event(conn, "test", {"config_id": config_id}, config_id=config_id)
-        _audit(
-            conn,
-            action="webhook.test_enqueued",
-            target_type="webhook",
-            target_id=config_id,
-            metadata={"destination_host": config["destination_host"], "enabled": bool(config["enabled"])},
-        )
+    try:
+        with transaction(conn):
+            test_webhook(conn, _principal(), config_id=config_id)
+    except NotFoundError:
+        abort(404)
     return Response(status=204)
 
 
@@ -1929,6 +1888,52 @@ def settings_update() -> ResponseReturnValue:
     conn = get_db()
     enabled = request.form.get("rotation_enabled") in {"1", "true", "on"}
     with transaction(conn):
-        set_rotation_enabled(conn, enabled)
-        _audit(conn, action="settings.rotation_enabled_updated", target_type="setting", target_id="rotation_enabled", metadata={"enabled": enabled})
+        set_rotation_enabled_setting(conn, _principal(), enabled=enabled)
     return redirect(url_for("routes.settings_view", ok="settings_updated"))
+
+
+@routes.get("/admin/api-keys")
+@require_role("admin")
+def api_keys_view() -> ResponseReturnValue:
+    conn = get_db()
+    rows = list_api_keys(conn)
+    return Response(
+        render_template("api_keys.html", api_keys=rows),
+        headers={"Cache-Control": "no-store, private"},
+    )
+
+
+@routes.post("/admin/api-keys")
+@require_role("admin")
+def api_keys_create() -> ResponseReturnValue:
+    require_recent_reauth()
+    name = (request.get_json(silent=True) or {}).get("name") if request.is_json else request.form.get("name")
+    if name is None:
+        name = request.form.get("name", "")
+    conn = get_db()
+    try:
+        with transaction(conn):
+            key_id, token = create_api_key(conn, principal_from_user(g.current_user), str(name or ""))
+    except DomainError as error:
+        return Response(error.message, status=error.status)
+    return Response(
+        jsonify({"id": key_id, "api_key": token}).get_data(as_text=True),
+        status=201,
+        headers={"Cache-Control": "no-store, private", "Content-Type": "application/json"},
+    )
+
+
+@routes.post("/admin/api-keys/<int:key_id>/revoke")
+@require_role("admin")
+def api_keys_revoke(key_id: int) -> ResponseReturnValue:
+    require_recent_reauth()
+    conn = get_db()
+    try:
+        with transaction(conn):
+            revoke_api_key(conn, principal_from_user(g.current_user), key_id)
+    except NotFoundError:
+        abort(404)
+    except DomainError as error:
+        return Response(error.message, status=error.status)
+    return Response(status=204)
+

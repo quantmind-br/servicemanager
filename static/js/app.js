@@ -1138,4 +1138,77 @@
     });
   }
 
+
+  // ===== API keys: one-time secret dialog + revoke confirmation.
+  const apiKeyDialog = document.getElementById("api-key-dialog");
+  const clearApiKeySecret = () => {
+    if (!apiKeyDialog) return;
+    const input = document.getElementById("api-key-secret-value");
+    const code = apiKeyDialog.querySelector("[data-api-key-value]");
+    if (input) input.value = "";
+    if (code) code.textContent = "";
+  };
+  const dismissApiKeySecret = () => {
+    if (!apiKeyDialog) return;
+    clearApiKeySecret();
+    if (apiKeyDialog.open) apiKeyDialog.close();
+    window.location.reload();
+  };
+  apiKeyDialog?.querySelector("[data-api-key-dismiss]")?.addEventListener("click", dismissApiKeySecret);
+  apiKeyDialog?.addEventListener("cancel", (event) => { event.preventDefault(); dismissApiKeySecret(); });
+  window.addEventListener("pagehide", clearApiKeySecret);
+
+  const apiKeyCreateForm = document.querySelector("[data-api-key-create]");
+  const apiKeyCreateError = document.querySelector("[data-api-key-create-error]");
+  apiKeyCreateForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const button = apiKeyCreateForm.querySelector('button[type="submit"]');
+    const label = button?.textContent || "Criar";
+    if (button) { button.disabled = true; button.textContent = "Enviando…"; }
+    if (apiKeyCreateError) { apiKeyCreateError.hidden = true; apiKeyCreateError.textContent = ""; }
+    try {
+      const response = await fetch(apiKeyCreateForm.action, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRFToken": csrfToken, "Accept": "application/json" },
+        body: new URLSearchParams(new FormData(apiKeyCreateForm)),
+      });
+      if (response.status === 201) {
+        const payload = await response.json();
+        const input = document.getElementById("api-key-secret-value");
+        const code = apiKeyDialog?.querySelector("[data-api-key-value]");
+        if (input) input.value = payload.api_key || "";
+        if (code) code.textContent = payload.api_key || "";
+        apiKeyDialog?.showModal();
+      } else if (response.status === 409) {
+        if (apiKeyCreateError) { apiKeyCreateError.textContent = "Nome de API key indisponível."; apiKeyCreateError.hidden = false; }
+        else showToast("Nome de API key indisponível.");
+      } else if (response.status === 400) {
+        if (apiKeyCreateError) { apiKeyCreateError.textContent = "Nome inválido."; apiKeyCreateError.hidden = false; }
+        else showToast("Nome inválido.");
+      } else {
+        throw new Error("api key create failed");
+      }
+    } catch {
+      showToast("Não foi possível criar a API key.");
+    } finally {
+      if (button) { button.disabled = false; button.textContent = label; }
+    }
+  });
+
+  document.querySelectorAll("[data-api-key-revoke]").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      if (form.dataset.confirmed === "1") return;
+      event.preventDefault();
+      event.stopPropagation();
+      const message = form.getAttribute("data-confirm") || "Revogar esta API key?";
+      const ok = await askConfirm(message);
+      if (!ok) return;
+      form.dataset.confirmed = "1";
+      if (typeof form.requestSubmit === "function") form.requestSubmit();
+      else form.submit();
+    });
+  });
+
 })();
