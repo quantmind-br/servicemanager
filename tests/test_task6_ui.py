@@ -166,6 +166,22 @@ def test_standard_forms_sync_hidden_csrf_field_to_meta_token_on_load(client):
     assert 'addEventListener("submit"' in script and ", true)" in script  # capture-phase, pre-submit
 
 
+def test_api_key_revoke_form_is_single_handled_by_capture_handler_deferral(client):
+    """The revoke form carries both data-api-key-revoke (bespoke listener) and
+    data-confirm. The capture-phase handler must defer to the bespoke listener,
+    otherwise the confirm runs twice. Regression: SELF_MANAGED_FORMS must list
+    [data-api-key-revoke] while ordinary data-confirm forms (the delete form)
+    stay covered by the generic confirm + submit-lock path."""
+    script = client.get("/static/js/app.js").get_data(as_text=True)
+    assert "[data-api-key-revoke]" in script
+    assert "SELF_MANAGED_FORMS" in script
+    # Revoke form excluded from the generic handler (single confirm via the
+    # bespoke listener); generic data-confirm handling still covers ordinary
+    # forms like the Excluir form.
+    assert "'[data-async-form], [data-no-submit-lock], [data-admin-create], [data-api-key-revoke]" in script
+    assert 'form.dataset.confirm && form.dataset.confirmed !== "1"' in script
+
+
 def test_login_and_account_ui_are_username_and_password_only(app, client):
     login = client.get("/login")
     login_body = login.get_data(as_text=True)

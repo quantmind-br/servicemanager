@@ -232,6 +232,26 @@ def revoke_api_key(conn: sqlite3.Connection, principal: AuditPrincipal, key_id: 
     return True
 
 
+def delete_api_key(conn: sqlite3.Connection, principal: AuditPrincipal, key_id: int) -> None:
+    row = conn.execute("SELECT id, name FROM api_keys WHERE id=?", (key_id,)).fetchone()
+    if row is None:
+        raise NotFoundError("API key não encontrada")
+    conn.execute("DELETE FROM api_keys WHERE id = ?", (key_id,))
+    audit(
+        conn,
+        principal,
+        action="api_key.deleted",
+        target_type="api_key",
+        target_id=key_id,
+        metadata={"name": row["name"]},
+    )
+    destructive_webhook(
+        conn,
+        principal,
+        {"action": "api_key.deleted", "target_type": "api_key", "target_id": key_id},
+    )
+
+
 def list_api_keys(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT id, name, created_at, last_used_at, revoked_at FROM api_keys ORDER BY id DESC"

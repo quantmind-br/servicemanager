@@ -4,7 +4,8 @@
 <section class="page-heading">
   <p class="eyebrow">Administração</p>
   <h1>API keys</h1>
-  <p class="muted">Crie e revogue chaves de integração servidor-a-servidor. O valor completo só aparece uma vez.</p>
+  <p class="muted">Crie, revogue e exclua chaves de integração servidor-a-servidor. O valor completo só aparece uma vez.</p>
+  {% if feedback %}<p class="feedback" role="status" data-feedback>{{ feedback }}</p>{% endif %}
 </section>
 
 <section class="panel">
@@ -39,13 +40,15 @@
           </td>
           <td class="cell-actions">
             {% if not key['revoked_at'] %}
-            <form method="post" action="{{ url_for('routes.api_keys_revoke', key_id=key['id']) }}" data-api-key-revoke data-confirm="Revogar esta API key? Integrações que a usam deixarão de autenticar.">
+            <form class="inline-form" method="post" action="{{ url_for('routes.api_keys_revoke', key_id=key['id']) }}" data-api-key-revoke data-confirm="Revogar esta API key? Integrações que a usam deixarão de autenticar.">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="button button-small button-danger" type="submit">Revogar</button>
             </form>
-            {% else %}
-            <span class="muted-hint">—</span>
             {% endif %}
+            <form class="inline-form" method="post" action="{{ url_for('routes.api_keys_delete', key_id=key['id']) }}" data-confirm="Excluir esta API key permanentemente? Integrações que a usam deixarão de autenticar. Esta ação não pode ser desfeita.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="button button-small button-danger" type="submit">Excluir</button>
+            </form>
           </td>
         </tr>
         {% else %}

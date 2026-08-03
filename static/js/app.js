@@ -353,7 +353,7 @@
   // stopPropagation); the global capture handler must defer to them so their
   // behavior is unchanged, while confirmation + submit locking apply at capture
   // phase to ordinary forms — including forms in lazily inserted detail fragments.
-  const SELF_MANAGED_FORMS = '[data-async-form], [data-no-submit-lock], [data-admin-create], [data-webhook-create], [data-webhook-edit], [data-webhook-test], [data-webhook-delete], form[action$="/reauth"]';
+  const SELF_MANAGED_FORMS = '[data-async-form], [data-no-submit-lock], [data-admin-create], [data-api-key-revoke], [data-webhook-create], [data-webhook-edit], [data-webhook-test], [data-webhook-delete], form[action$="/reauth"]';
   document.addEventListener("submit", (event) => {
     const form = event.target;
     if (!(form instanceof HTMLFormElement)) return;

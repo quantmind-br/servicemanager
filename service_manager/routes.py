@@ -48,6 +48,7 @@ from service_manager.operations import (
     create_webhook,
     delete_account,
     delete_field_value,
+    delete_api_key,
     delete_service,
     delete_webhook,
     grant_membership,
@@ -97,6 +98,7 @@ OK_MESSAGES = {
     "rotation_completed": "Rotação concluída.",
     "rotation_incomplete": "Rotação marcada como pendente.",
     "settings_updated": "Configurações atualizadas.",
+    "api_key_deleted": "API key excluída.",
 }
 ROTATION_LABELS = {
     "unknown": "Desconhecido",
@@ -1897,8 +1899,9 @@ def settings_update() -> ResponseReturnValue:
 def api_keys_view() -> ResponseReturnValue:
     conn = get_db()
     rows = list_api_keys(conn)
+    feedback = OK_MESSAGES.get(request.args.get("ok") or "")
     return Response(
-        render_template("api_keys.html", api_keys=rows),
+        render_template("api_keys.html", api_keys=rows, feedback=feedback),
         headers={"Cache-Control": "no-store, private"},
     )
 
@@ -1936,4 +1939,17 @@ def api_keys_revoke(key_id: int) -> ResponseReturnValue:
     except DomainError as error:
         return Response(error.message, status=error.status)
     return Response(status=204)
+
+
+@routes.post("/admin/api-keys/<int:key_id>/delete")
+@require_role("admin")
+def api_keys_delete(key_id: int) -> ResponseReturnValue:
+    require_recent_reauth()
+    conn = get_db()
+    try:
+        with transaction(conn):
+            delete_api_key(conn, principal_from_user(g.current_user), key_id)
+    except NotFoundError:
+        abort(404)
+    return redirect(url_for("routes.api_keys_view", ok="api_key_deleted"))
 
