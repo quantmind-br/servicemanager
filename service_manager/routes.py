@@ -113,7 +113,6 @@ TEMPLATE_ROWS = [
     ("exemplo2@gmail.com", "SenhaSegura2", "ativo"),
 ]
 
-_ACCOUNT_PAGE_SIZE = 100
 _COVERAGE_PAGE_SIZE = 100
 _STATUS_RANK_SQL = "CASE link.status WHEN 'ativo' THEN 0 WHEN 'nunca' THEN 1 WHEN 'inativo' THEN 2 ELSE 1 END"
 _ACCOUNT_SELECT = (
@@ -194,20 +193,6 @@ def _account_order_sql(sort: str, sql_dir: str) -> str:
     if sort == "status":
         return f"{_STATUS_RANK_SQL} {sql_dir}, a.email COLLATE NOCASE {sql_dir}, a.id {sql_dir}"
     return f"a.email COLLATE NOCASE {sql_dir}, a.id {sql_dir}"
-
-
-def _account_keyset_sql(sort: str, op: str) -> str:
-    if sort == "status":
-        rank = _STATUS_RANK_SQL
-        return (
-            f"({rank} {op} :cur_rank "
-            f"OR ({rank} = :cur_rank AND a.email COLLATE NOCASE {op} :cur_e) "
-            f"OR ({rank} = :cur_rank AND a.email COLLATE NOCASE = :cur_e AND a.id {op} :cur_id))"
-        )
-    return (
-        f"(a.email COLLATE NOCASE {op} :cur_e "
-        f"OR (a.email COLLATE NOCASE = :cur_e AND a.id {op} :cur_id))"
-    )
 
 
 def normalize_status(value: str | None) -> str | None:
@@ -938,10 +923,6 @@ def index() -> str:
     rotation_counts = {"due_soon": 0, "overdue": 0}
     service_days = None
     page_count = 0
-    prev_cursor: str | None = None
-    next_cursor: str | None = None
-    has_prev = False
-    has_next = False
 
     if service_id is not None:
         if rot_enabled:
@@ -953,73 +934,8 @@ def index() -> str:
             service_id=service_id, q=q, status=st_filter, registered=reg_filter,
             rot_state=rot_filter, service_days=service_days, today=today,
         )
-        cursor_token = request.args.get("cursor")
-        focus_raw = request.args.get("focus")
-        limit = _ACCOUNT_PAGE_SIZE + 1
-
-        if cursor_token:
-            cur = _decode_cursor("account-cursor", cursor_token)
-            if cur.get("s") != sort or cur.get("d") != direction or cur.get("nav") not in ("next", "prev"):
-                abort(400)
-            if not isinstance(cur.get("e"), str) or not isinstance(cur.get("id"), int):
-                abort(400)
-            st = cur.get("st")
-            if sort == "status" and (not isinstance(st, str) or st not in STATUS_ORDER):
-                abort(400)
-            nav = cur["nav"]
-            use_gt = (nav == "next") == ascending
-            op = ">" if use_gt else "<"
-            sql_dir = "ASC" if use_gt else "DESC"
-            params = dict(base_params)
-            params["cur_e"] = cur["e"]
-            params["cur_id"] = cur["id"]
-            if sort == "status":
-                assert isinstance(st, str)
-                params["cur_rank"] = STATUS_ORDER[st]
-            params["limit"] = limit
-            sql = f"{_ACCOUNT_SELECT} WHERE {filter_sql} AND {_account_keyset_sql(sort, op)} ORDER BY {_account_order_sql(sort, sql_dir)} LIMIT :limit"
-            fetched = conn.execute(sql, params).fetchall()
-            has_more = len(fetched) > _ACCOUNT_PAGE_SIZE
-            page = fetched[:_ACCOUNT_PAGE_SIZE]
-            if nav == "prev":
-                page = list(reversed(page))
-                has_prev = has_more
-                has_next = True
-            else:
-                has_next = has_more
-                has_prev = True
-        else:
-            focus_id = int(focus_raw) if focus_raw and focus_raw.isdigit() and int(focus_raw) > 0 else None
-            page_start = 0
-            if focus_id is not None:
-                anchor = conn.execute(
-                    "SELECT a.email AS email, link.status AS status FROM account_service AS link "
-                    "JOIN accounts AS a ON a.id = link.account_id WHERE link.service_id = :sid AND a.id = :fid",
-                    {"sid": service_id, "fid": focus_id},
-                ).fetchone()
-                if anchor is None:
-                    focus_id = None
-                else:
-                    before_op = "<" if ascending else ">"
-                    cparams = dict(base_params)
-                    cparams["cur_e"] = anchor["email"]
-                    cparams["cur_id"] = focus_id
-                    if sort == "status":
-                        cparams["cur_rank"] = STATUS_ORDER.get(anchor["status"], 1)
-                    before = conn.execute(
-                        f"SELECT COUNT(*) AS n FROM account_service AS link JOIN accounts AS a ON a.id = link.account_id "
-                        f"WHERE {filter_sql} AND {_account_keyset_sql(sort, before_op)}",
-                        cparams,
-                    ).fetchone()["n"]
-                    page_start = (before // _ACCOUNT_PAGE_SIZE) * _ACCOUNT_PAGE_SIZE
-            params = dict(base_params)
-            params["limit"] = limit
-            params["offset"] = page_start
-            sql = f"{_ACCOUNT_SELECT} WHERE {filter_sql} ORDER BY {_account_order_sql(sort, 'ASC' if ascending else 'DESC')} LIMIT :limit OFFSET :offset"
-            fetched = conn.execute(sql, params).fetchall()
-            has_next = len(fetched) > _ACCOUNT_PAGE_SIZE
-            page = fetched[:_ACCOUNT_PAGE_SIZE]
-            has_prev = page_start > 0
+        sql = f"{_ACCOUNT_SELECT} WHERE {filter_sql} ORDER BY {_account_order_sql(sort, 'ASC' if ascending else 'DESC')}"
+        page = conn.execute(sql, base_params).fetchall()
 
         for row in page:
             entry: dict[str, object] = {
@@ -1040,18 +956,6 @@ def index() -> str:
                 })
             rows.append(entry)
         page_count = len(rows)
-
-        def _mk_cursor(row: Any, nav: str) -> str:
-            payload: dict[str, object] = {"s": sort, "d": direction, "nav": nav, "e": row["email"], "id": row["id"]}
-            if sort == "status":
-                payload["st"] = row["status"]
-            return _encode_cursor("account-cursor", payload)
-
-        if page:
-            if has_prev:
-                prev_cursor = _mk_cursor(page[0], "prev")
-            if has_next:
-                next_cursor = _mk_cursor(page[-1], "next")
 
         for crow in conn.execute("SELECT link.status AS s, COUNT(*) AS n FROM account_service AS link WHERE link.service_id = ? GROUP BY link.status", (service_id,)):
             if crow["s"] in counts:
@@ -1102,8 +1006,7 @@ def index() -> str:
         no_access=no_access, rotation_counts=rotation_counts, rot_filter=rot_filter, rotation_labels=ROTATION_LABELS,
         service_rotation_days=(service_days if service_id is not None else None), rotation_enabled=rot_enabled,
         q=q, st_filter=st_filter, reg_filter=reg_filter, sort=sort, direction=direction, filters_active=filters_active,
-        page_count=page_count, has_prev=has_prev, has_next=has_next, prev_cursor=prev_cursor, next_cursor=next_cursor,
-        view_params=view_params,
+        page_count=page_count, view_params=view_params,
     )
 
 

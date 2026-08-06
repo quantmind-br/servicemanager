@@ -264,9 +264,7 @@
     </table>
   </div>
   <nav class="pagination" aria-label="Paginação de contas">
-    {% if has_prev %}<a class="button button-small button-quiet" rel="prev" href="{{ url_for('routes.index', service=current, cursor=prev_cursor, **view_params) }}">Anterior</a>{% endif %}
-    <span class="muted" data-page-count>Mostrando {{ page_count }} conta(s) nesta página</span>
-    {% if has_next %}<a class="button button-small button-quiet" rel="next" href="{{ url_for('routes.index', service=current, cursor=next_cursor, **view_params) }}">Próxima</a>{% endif %}
+    <span class="muted" data-page-count>Mostrando {{ page_count }} conta(s)</span>
   </nav>
   {% else %}<div class="empty-wrap"><p class="empty-state">Nenhuma conta cadastrada neste serviço ainda. Use “Adicionar conta” acima para começar.</p></div>{% endif %}
 </section>

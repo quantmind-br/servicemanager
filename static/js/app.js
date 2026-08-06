@@ -417,7 +417,7 @@
   });
 
   // ===== Filters and sort drive server-side navigation. Changing a control
-  // reloads with the encoded query so each response stays bounded to 100 rows.
+  // reloads with the encoded query; the full matching result set is returned.
   let refreshBulkSelection = () => {};
   const filterInput = document.getElementById("account-filter");
   const statusFilter = document.getElementById("filter-status");
@@ -427,9 +427,6 @@
 
   const navigateAccounts = (mutate) => {
     const url = new URL(window.location.href);
-    // Filter/sort changes reset pagination and focus.
-    url.searchParams.delete("cursor");
-    url.searchParams.delete("focus");
     mutate(url.searchParams);
     window.location.assign(url.pathname + "?" + url.searchParams.toString());
   };
