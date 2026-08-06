@@ -1,0 +1,142 @@
+- link "Ir para o conteúdo" [ref=e1]
+- banner
+  - link "Service Manager" [ref=e2]
+  - StaticText "admin · admin"
+  - group
+    - DisclosureTriangle "Administração" [expanded=false]
+  - link "Visão geral" [ref=e3]
+  - link "Minha conta" [ref=e4]
+  - form
+    - button "Sair" [ref=e11]
+- main
+  - generic
+    - paragraph
+      - StaticText "COFRE DE ACESSO"
+    - heading "Contas de serviço" [level=1, ref=e12]
+    - paragraph
+      - StaticText "Serviço selecionado: "
+      - strong
+        - StaticText "AWS Console"
+  - region "Serviços" [ref=e5]
+    - navigation "Selecionar serviço" [ref=e13]
+      - link "AWS Console" [ref=e21]
+      - link "Banco do Brasil - Portal Empresarial de Gestao de Contas" [ref=e22]
+      - link "GitHub Enterprise" [ref=e23]
+      - link "Google Workspace" [ref=e24]
+      - link "Sem contas ainda" [ref=e25]
+      - link "Slack" [ref=e26]
+    - button "Organizar serviços" [ref=e14]
+    - form
+      - textbox "Nome do novo serviço" [required, ref=e27]
+      - button "Adicionar" [ref=e28]
+    - form
+      - button "Excluir serviço" [ref=e29]
+  - region "Resumo das contas" [ref=e6]
+    - strong
+      - StaticText "15"
+    - StaticText " contas"
+    - StaticText "5"
+    - StaticText "ativas"
+    - StaticText "5"
+    - StaticText "sem uso"
+    - StaticText "5"
+    - StaticText "inativas"
+  - StaticText "Filtros ativos · mostrando 1 conta(s) nesta página"
+  - button "Limpar filtros" [ref=e7]
+  - button "Copiar link da visão" [ref=e8]
+  - group
+    - DisclosureTriangle "Adicionar conta" [expanded=false]
+  - group
+    - DisclosureTriangle "Importar contas" [expanded=false]
+  - paragraph
+    - link "Modelo CSV" [ref=e15]
+    - StaticText " · "
+    - link "Modelo XLSX" [ref=e16]
+    - StaticText " · "
+    - link "Exportar CSV" [ref=e17]
+    - StaticText " · "
+    - link "Exportar XLSX" [ref=e18]
+  - StaticText "Vencida: 2"
+  - StaticText "Vence em breve: 1"
+  - link "Ver rotação" [ref=e9]
+  - group
+    - DisclosureTriangle "Política do serviço" [expanded=false]
+  - region "Contas" [ref=e10]
+    - heading "Contas" [level=2, ref=e19]
+    - paragraph
+      - StaticText "A senha principal permanece oculta até “Exibir”. Campos adicionais ficam visíveis e cifrados em repouso."
+    - table "Contas do serviço AWS Console"
+      - caption
+        - StaticText "Contas do serviço AWS Console"
+      - rowgroup
+        - row
+          - columnheader "Selecionar contas desta página" [ref=e35]
+            - checkbox "Selecionar contas desta página" [checked=false, ref=e48]
+          - columnheader "EMAIL juri" [ref=e36]
+            - button "EMAIL" [ref=e49]
+            - searchbox "Filtrar por email" [ref=e50]: juri
+              - StaticText "juri"
+          - columnheader "SENHA" [ref=e37]
+          - columnheader "STATUS ↑ Todos" [ref=e38]
+            - button "STATUS ↑" [ref=e51]
+              - StaticText "STATUS"
+              - StaticText " ↑"
+            - combobox "Filtrar por status" [expanded=false, ref=e52]: Todos
+              - MenuListPopup
+                - option "Todos" [selected, ref=e61]
+                - option "Ativo" [ref=e62]
+                - option "Nunca teve" [ref=e63]
+                - option "Teve, mas inativo" [ref=e64]
+          - columnheader "CADASTRO Todos" [ref=e39]
+            - StaticText "CADASTRO"
+            - combobox "Filtrar por cadastro" [expanded=false, ref=e53]: Todos
+              - MenuListPopup
+                - option "Todos" [selected, ref=e65]
+                - option "Cadastrada" [ref=e66]
+                - option "Não cadastrada" [ref=e67]
+          - columnheader "ROTAÇÃO Todas" [ref=e40]
+            - StaticText "ROTAÇÃO"
+            - combobox "Filtrar por rotação" [expanded=false, ref=e54]: Todas
+              - MenuListPopup
+                - option "Todas" [selected, ref=e68]
+                - option "Vencida" [ref=e69]
+                - option "Vence em breve" [ref=e70]
+                - option "Em dia" [ref=e71]
+                - option "Sem política" [ref=e72]
+                - option "Desconhecido" [ref=e73]
+          - columnheader "AÇÕES" [ref=e41]
+      - row
+        - cell "Selecionar juridico@empresa-exemplo.com.br" [ref=e30]
+          - checkbox "Selecionar juridico@empresa-exemplo.com.br" [checked=false, ref=e42]
+        - cell "Detalhes da conta juridico@empresa-exemplo.com.br Copiar e-mail" [ref=e31]
+          - button "Detalhes da conta" [expanded=false, ref=e43]
+          - StaticText "juridico@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e44]
+        - cell "•••••••• Exibir senha Copiar senha" [ref=e32]
+          - StaticText "••••••••"
+          - button "Exibir senha" [ref=e45]
+          - button "Copiar senha" [ref=e46]
+        - cell
+          - form
+            - combobox "Status da conta" [expanded=false, ref=e55]: Ativo
+              - MenuListPopup
+                - option "Ativo" [selected, ref=e74]
+                - option "Nunca teve" [ref=e75]
+                - option "Teve, mas inativo" [ref=e76]
+            - button "Copiar status" [ref=e56]
+        - cell
+          - form
+            - LabelText [ref=e57] clickable [cursor:pointer]
+              - checkbox "Cadastrada" [checked=false, ref=e60]
+            - button "Copiar cadastro" [ref=e58]
+        - cell "Em dia Política" [ref=e33]
+          - StaticText "Em dia"
+          - group
+            - DisclosureTriangle "Política" [expanded=false]
+              - StaticText "Política"
+        - cell "Editar conta" [ref=e34]
+          - button "Editar conta" [ref=e47]
+          - form
+            - button "Excluir conta" [ref=e59]
+    - navigation "Paginação de contas" [ref=e20]
+      - StaticText "Mostrando 1 conta(s) nesta página"

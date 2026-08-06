@@ -1,0 +1,99 @@
+- link "Ir para o conteúdo" [ref=e1]
+- banner
+  - link "Service Manager" [ref=e2]
+  - StaticText "admin · admin"
+  - group
+    - DisclosureTriangle "Administração" [expanded=false]
+  - link "Visão geral" [ref=e3]
+  - link "Minha conta" [ref=e4]
+  - form
+    - button "Sair" [ref=e5]
+- main
+  - generic
+    - paragraph
+      - StaticText "ADMINISTRAÇÃO"
+    - heading "Acessos por serviço" [level=1, ref=e6]
+    - paragraph
+      - StaticText "Conceda papéis por serviço a operadores. Administradores globais têm acesso a tudo."
+  - generic
+    - heading "Membros" [level=2, ref=e7]
+    - paragraph
+      - StaticText "6 serviços · 3 usuários"
+    - table
+      - rowgroup
+        - row
+          - columnheader "USUÁRIO" [ref=e29]
+          - columnheader "AWS CONSOLE" [ref=e30]
+          - columnheader "BANCO DO BRASIL - PORTAL EMPRESARIAL DE GESTAO DE CONTAS" [ref=e31]
+          - columnheader "GITHUB ENTERPRISE" [ref=e32]
+          - columnheader "GOOGLE WORKSPACE" [ref=e33]
+          - columnheader "SEM CONTAS AINDA" [ref=e34]
+          - columnheader "SLACK" [ref=e35]
+      - row
+        - cell "admin admin global" [ref=e8]
+          - strong
+            - StaticText "admin"
+          - StaticText " admin global"
+        - cell "acesso global" [ref=e9]
+        - cell "acesso global" [ref=e10]
+        - cell "acesso global" [ref=e11]
+        - cell "acesso global" [ref=e12]
+        - cell "acesso global" [ref=e13]
+        - cell "acesso global" [ref=e14]
+      - row
+        - cell "inativo.antigo inativo" [ref=e15]
+          - strong
+            - StaticText "inativo.antigo"
+          - StaticText " inativo"
+        - cell "—" [ref=e16]
+        - cell "—" [ref=e17]
+        - cell "—" [ref=e18]
+        - cell "—" [ref=e19]
+        - cell "—" [ref=e20]
+        - cell "—" [ref=e21]
+      - row
+        - cell "operador" [ref=e22]
+          - strong
+            - StaticText "operador"
+        - cell "editor" [ref=e23]
+          - combobox "Papel de operador em AWS Console" [expanded=false, ref=e36]: editor
+            - MenuListPopup
+              - option "Sem acesso" [ref=e42]
+              - option "viewer" [ref=e43]
+              - option "editor" [selected, ref=e44]
+              - option "service_admin" [ref=e45]
+        - cell "Sem acesso" [ref=e24]
+          - combobox "Papel de operador em Banco do Brasil - Portal Empresarial de Gestao de Contas" [expanded=false, ref=e37]: Sem acesso
+            - MenuListPopup
+              - option "Sem acesso" [selected, ref=e46]
+              - option "viewer" [ref=e47]
+              - option "editor" [ref=e48]
+              - option "service_admin" [ref=e49]
+        - cell "Sem acesso" [ref=e25]
+          - combobox "Papel de operador em GitHub Enterprise" [expanded=false, ref=e38]: Sem acesso
+            - MenuListPopup
+              - option "Sem acesso" [selected, ref=e50]
+              - option "viewer" [ref=e51]
+              - option "editor" [ref=e52]
+              - option "service_admin" [ref=e53]
+        - cell "viewer" [ref=e26]
+          - combobox "Papel de operador em Google Workspace" [expanded=false, ref=e39]: viewer
+            - MenuListPopup
+              - option "Sem acesso" [ref=e54]
+              - option "viewer" [selected, ref=e55]
+              - option "editor" [ref=e56]
+              - option "service_admin" [ref=e57]
+        - cell "Sem acesso" [ref=e27]
+          - combobox "Papel de operador em Sem contas ainda" [expanded=false, ref=e40]: Sem acesso
+            - MenuListPopup
+              - option "Sem acesso" [selected, ref=e58]
+              - option "viewer" [ref=e59]
+              - option "editor" [ref=e60]
+              - option "service_admin" [ref=e61]
+        - cell "service_admin" [ref=e28]
+          - combobox "Papel de operador em Slack" [expanded=false, ref=e41]: service_admin
+            - MenuListPopup
+              - option "Sem acesso" [ref=e62]
+              - option "viewer" [ref=e63]
+              - option "editor" [ref=e64]
+              - option "service_admin" [selected, ref=e65]

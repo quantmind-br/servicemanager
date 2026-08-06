@@ -278,6 +278,9 @@ def test_feature_source_files_are_present_for_packaging():
         "templates/rotation.html",
         "templates/security_integrations.html",
         "templates/api_keys.html",
+        ".agents/skills/service-manager-api-management/SKILL.md",
+        ".agents/skills/service-manager-api-management/scripts/service_manager_api.py",
+        ".agents/skills/service-manager-api-management/references/ENDPOINTS.md",
     ):
         assert (ROOT / relative).is_file(), relative
 

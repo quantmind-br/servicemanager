@@ -1,0 +1,67 @@
+- link "Ir para o conteúdo" [ref=e1]
+- banner
+  - link "Service Manager" [ref=e2]
+  - StaticText "admin · admin"
+  - group
+    - DisclosureTriangle "Administração" [expanded=false]
+  - link "Visão geral" [ref=e3]
+  - link "Minha conta" [ref=e4]
+  - form
+    - button "Sair" [ref=e10]
+- main
+  - generic
+    - paragraph
+      - StaticText "COFRE DE ACESSO"
+    - heading "Contas de serviço" [level=1, ref=e11]
+    - paragraph
+      - StaticText "Serviço selecionado: "
+      - strong
+        - StaticText "Sem contas ainda"
+  - region "Serviços" [ref=e5]
+    - navigation "Selecionar serviço" [ref=e12]
+      - link "AWS Console" [ref=e19]
+      - link "Banco do Brasil - Portal Empresarial de Gestao de Contas" [ref=e20]
+      - link "GitHub Enterprise" [ref=e21]
+      - link "Google Workspace" [ref=e22]
+      - link "Sem contas ainda" [ref=e23]
+      - link "Slack" [ref=e24]
+    - button "Organizar serviços" [ref=e13]
+    - form
+      - textbox "Nome do novo serviço" [required, ref=e25]
+      - button "Adicionar" [ref=e26]
+    - form
+      - button "Excluir serviço" [ref=e27]
+  - region "Resumo das contas" [ref=e6]
+    - strong
+      - StaticText "0"
+    - StaticText " contas"
+    - StaticText "0"
+    - StaticText "ativas"
+    - StaticText "0"
+    - StaticText "sem uso"
+    - StaticText "0"
+    - StaticText "inativas"
+  - button "Copiar link da visão" [ref=e7]
+  - group
+    - DisclosureTriangle "Adicionar conta" [expanded=false]
+  - group
+    - DisclosureTriangle "Importar contas" [expanded=false]
+  - paragraph
+    - link "Modelo CSV" [ref=e14]
+    - StaticText " · "
+    - link "Modelo XLSX" [ref=e15]
+    - StaticText " · "
+    - link "Exportar CSV" [ref=e16]
+    - StaticText " · "
+    - link "Exportar XLSX" [ref=e17]
+  - StaticText "Vencida: 0"
+  - StaticText "Vence em breve: 0"
+  - link "Ver rotação" [ref=e8]
+  - group
+    - DisclosureTriangle "Política do serviço" [expanded=false]
+  - region "Contas" [ref=e9]
+    - heading "Contas" [level=2, ref=e18]
+    - paragraph
+      - StaticText "A senha principal permanece oculta até “Exibir”. Campos adicionais ficam visíveis e cifrados em repouso."
+    - paragraph
+      - StaticText "Nenhuma conta cadastrada neste serviço ainda. Use “Adicionar conta” acima para começar."

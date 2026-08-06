@@ -1,0 +1,19 @@
+- link "Ir para o conteúdo" [ref=e1]
+- banner
+  - link "Service Manager" [ref=e2]
+  - StaticText "admin · admin"
+  - group
+    - DisclosureTriangle "Administração" [expanded=false]
+  - link "Visão geral" [ref=e3]
+  - link "Minha conta" [ref=e4]
+  - form
+    - button "Sair" [ref=e5]
+- main
+  - generic
+    - paragraph
+      - StaticText "ERRO 403"
+    - heading "Acesso negado" [level=1, ref=e6]
+    - paragraph
+      - StaticText "Você não tem autorização para esta ação."
+    - paragraph
+      - link "Confirmar senha novamente" [ref=e7]

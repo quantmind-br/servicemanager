@@ -1,0 +1,93 @@
+- link "Ir para o conteúdo" [ref=e1]
+- banner
+  - link "Service Manager" [ref=e2]
+  - StaticText "admin · admin"
+  - group
+    - DisclosureTriangle "Administração" [expanded=false]
+  - link "Visão geral" [ref=e3]
+  - link "Minha conta" [ref=e4]
+  - form
+    - button "Sair" [ref=e5]
+- main
+  - generic
+    - paragraph
+      - StaticText "ADMINISTRAÇÃO"
+    - heading "Usuários" [level=1, ref=e6]
+    - paragraph
+      - StaticText "Crie acessos e ajuste permissões sem sair desta página."
+  - generic
+    - heading "Contas de acesso" [level=2, ref=e7]
+    - paragraph
+      - StaticText "3 usuários"
+    - table
+      - rowgroup
+        - row
+          - columnheader "LOGIN" [ref=e30]
+          - columnheader "PAPEL" [ref=e31]
+          - columnheader "ATIVO" [ref=e32]
+          - columnheader "ACESSOS" [ref=e33]
+          - columnheader "TROCA DE SENHA PENDENTE" [ref=e34]
+          - columnheader "AÇÕES" [ref=e35]
+      - row
+        - cell "admin você" [ref=e10]
+          - strong
+            - StaticText "admin"
+          - StaticText " você"
+        - cell "Admin" [ref=e11]
+          - combobox "Papel de admin" [expanded=false, disabled, ref=e36]: Admin
+            - MenuListPopup
+              - option "Admin" [disabled, ref=e49]
+              - option "Operador" [disabled, ref=e50]
+        - cell "Acesso ativo de admin" [ref=e12]
+          - LabelText [ref=e37] clickable [cursor:pointer]
+            - checkbox "Acesso ativo de admin" [checked=true, disabled, ref=e44]
+        - cell "acesso global" [ref=e13]
+        - cell "Não" [ref=e14]
+        - cell "Protegido nesta tela" [ref=e15]
+      - row
+        - cell "inativo.antigo" [ref=e16]
+          - strong
+            - StaticText "inativo.antigo"
+        - cell "Operador" [ref=e17]
+          - combobox "Papel de inativo.antigo" [expanded=false, ref=e38]: Operador
+            - MenuListPopup
+              - option "Admin" [ref=e51]
+              - option "Operador" [selected, ref=e52]
+        - cell "Acesso ativo de inativo.antigo" [ref=e18]
+          - LabelText [ref=e39] clickable [cursor:pointer]
+            - checkbox "Acesso ativo de inativo.antigo" [checked=false, ref=e45]
+        - cell "0 serviço(s)" [ref=e19]
+          - link "0 serviço(s)" [ref=e40]
+        - cell "Sim" [ref=e20]
+        - cell "Alterações salvas automaticamente" [ref=e21]
+      - row
+        - cell "operador" [ref=e22]
+          - strong
+            - StaticText "operador"
+        - cell "Operador" [ref=e23]
+          - combobox "Papel de operador" [expanded=false, ref=e41]: Operador
+            - MenuListPopup
+              - option "Admin" [ref=e53]
+              - option "Operador" [selected, ref=e54]
+        - cell "Acesso ativo de operador" [ref=e24]
+          - LabelText [ref=e42] clickable [cursor:pointer]
+            - checkbox "Acesso ativo de operador" [checked=true, ref=e46]
+        - cell "3 serviço(s)" [ref=e25]
+          - link "3 serviço(s)" [ref=e43]
+        - cell "Não" [ref=e26]
+        - cell "Alterações salvas automaticamente" [ref=e27]
+  - generic
+    - heading "Criar usuário" [level=2, ref=e8]
+    - paragraph
+      - StaticText "A senha temporária aparece uma única vez."
+    - form
+      - LabelText
+        - StaticText "Login"
+        - textbox "Login" [required, ref=e28]
+      - LabelText
+        - StaticText "Papel"
+        - combobox "Papel" [expanded=false, ref=e29]: Operador
+          - MenuListPopup
+            - option "Operador" [selected, ref=e47]
+            - option "Admin" [ref=e48]
+      - button "Criar" [ref=e9]

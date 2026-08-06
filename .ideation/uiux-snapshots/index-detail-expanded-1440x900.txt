@@ -1,0 +1,608 @@
+- link "Ir para o conteúdo" [ref=e1]
+- banner
+  - link "Service Manager" [ref=e2]
+  - StaticText "admin · admin"
+  - group
+    - DisclosureTriangle "Administração" [expanded=false]
+  - link "Visão geral" [ref=e3]
+  - link "Minha conta" [ref=e4]
+  - form
+    - button "Sair" [ref=e10]
+- main
+  - generic
+    - paragraph
+      - StaticText "COFRE DE ACESSO"
+    - heading "Contas de serviço" [level=1, ref=e11]
+    - paragraph
+      - StaticText "Serviço selecionado: "
+      - strong
+        - StaticText "Google Workspace"
+  - region "Serviços" [ref=e5]
+    - navigation "Selecionar serviço" [ref=e12]
+      - link "AWS Console" [ref=e20]
+      - link "Banco do Brasil - Portal Empresarial de Gestao de Contas" [ref=e21]
+      - link "GitHub Enterprise" [ref=e22]
+      - link "Google Workspace" [ref=e23]
+      - link "Sem contas ainda" [ref=e24]
+      - link "Slack" [ref=e25]
+    - button "Organizar serviços" [ref=e13]
+    - form
+      - textbox "Nome do novo serviço" [required, ref=e26]
+      - button "Adicionar" [ref=e27]
+    - form
+      - button "Excluir serviço" [ref=e28]
+  - region "Resumo das contas" [ref=e6]
+    - strong
+      - StaticText "15"
+    - StaticText " contas"
+    - StaticText "5"
+    - StaticText "ativas"
+    - StaticText "5"
+    - StaticText "sem uso"
+    - StaticText "5"
+    - StaticText "inativas"
+  - button "Copiar link da visão" [ref=e7]
+  - group
+    - DisclosureTriangle "Adicionar conta" [expanded=false]
+  - group
+    - DisclosureTriangle "Importar contas" [expanded=false]
+  - paragraph
+    - link "Modelo CSV" [ref=e14]
+    - StaticText " · "
+    - link "Modelo XLSX" [ref=e15]
+    - StaticText " · "
+    - link "Exportar CSV" [ref=e16]
+    - StaticText " · "
+    - link "Exportar XLSX" [ref=e17]
+  - StaticText "Vencida: 2"
+  - StaticText "Vence em breve: 1"
+  - link "Ver rotação" [ref=e8]
+  - group
+    - DisclosureTriangle "Política do serviço" [expanded=false]
+  - region "Contas" [ref=e9]
+    - heading "Contas" [level=2, ref=e18]
+    - paragraph
+      - StaticText "A senha principal permanece oculta até “Exibir”. Campos adicionais ficam visíveis e cifrados em repouso."
+    - table "Contas do serviço Google Workspace"
+      - caption
+        - StaticText "Contas do serviço Google Workspace"
+      - rowgroup
+        - row
+          - columnheader "Selecionar contas desta página" [ref=e105]
+            - checkbox "Selecionar contas desta página" [checked=false, ref=e203]
+          - columnheader "EMAIL Filtrar por email" [ref=e106]
+            - button "EMAIL" [ref=e204]
+            - searchbox "Filtrar por email" [ref=e205]
+          - columnheader "SENHA" [ref=e107]
+          - columnheader "STATUS ↑ Todos" [ref=e108]
+            - button "STATUS ↑" [ref=e206]
+              - StaticText "STATUS"
+              - StaticText " ↑"
+            - combobox "Filtrar por status" [expanded=false, ref=e207]: Todos
+              - MenuListPopup
+                - option "Todos" [selected, ref=e300]
+                - option "Ativo" [ref=e301]
+                - option "Nunca teve" [ref=e302]
+                - option "Teve, mas inativo" [ref=e303]
+          - columnheader "CADASTRO Todos" [ref=e109]
+            - StaticText "CADASTRO"
+            - combobox "Filtrar por cadastro" [expanded=false, ref=e208]: Todos
+              - MenuListPopup
+                - option "Todos" [selected, ref=e304]
+                - option "Cadastrada" [ref=e305]
+                - option "Não cadastrada" [ref=e306]
+          - columnheader "ROTAÇÃO Todas" [ref=e110]
+            - StaticText "ROTAÇÃO"
+            - combobox "Filtrar por rotação" [expanded=false, ref=e209]: Todas
+              - MenuListPopup
+                - option "Todas" [selected, ref=e307]
+                - option "Vencida" [ref=e308]
+                - option "Vence em breve" [ref=e309]
+                - option "Em dia" [ref=e310]
+                - option "Sem política" [ref=e311]
+                - option "Desconhecido" [ref=e312]
+          - columnheader "AÇÕES" [ref=e111]
+      - row
+        - cell "Selecionar dados@empresa-exemplo.com.br" [ref=e29]
+          - checkbox "Selecionar dados@empresa-exemplo.com.br" [checked=false, ref=e112]
+        - cell "Detalhes da conta dados@empresa-exemplo.com.br Copiar e-mail" [ref=e30]
+          - button "Detalhes da conta" [expanded=true, ref=e113]
+          - StaticText "dados@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e114]
+        - cell "•••••••• Exibir senha Copiar senha" [ref=e31]
+          - StaticText "••••••••"
+          - button "Exibir senha" [ref=e115]
+          - button "Copiar senha" [ref=e116]
+        - cell
+          - form
+            - combobox "Status da conta" [expanded=false, ref=e210]: Ativo
+              - MenuListPopup
+                - option "Ativo" [selected, ref=e313]
+                - option "Nunca teve" [ref=e314]
+                - option "Teve, mas inativo" [ref=e315]
+            - button "Copiar status" [ref=e211]
+        - cell
+          - form
+            - LabelText [ref=e212] clickable [cursor:pointer]
+              - checkbox "Cadastrada" [checked=false, ref=e285]
+            - button "Copiar cadastro" [ref=e213]
+        - cell "Vencida Política" [ref=e32]
+          - StaticText "Vencida"
+          - group
+            - DisclosureTriangle "Política" [expanded=false]
+              - StaticText "Política"
+        - cell "Editar conta" [ref=e33]
+          - button "Editar conta" [ref=e117]
+          - form
+            - button "Excluir conta" [ref=e214]
+      - row
+        - cell "Campos adicionais Nenhum campo adicional. Adicionar campo" [ref=e34]
+          - heading "Campos adicionais" [level=3, ref=e118]
+          - paragraph
+            - StaticText "Nenhum campo adicional."
+          - group
+            - DisclosureTriangle "Adicionar campo" [expanded=false]
+      - row
+        - cell "Selecionar estagio@empresa-exemplo.com.br" [ref=e35]
+          - checkbox "Selecionar estagio@empresa-exemplo.com.br" [checked=false, ref=e119]
+        - cell "Detalhes da conta estagio@empresa-exemplo.com.br Copiar e-mail" [ref=e36]
+          - button "Detalhes da conta" [expanded=false, ref=e120]
+          - StaticText "estagio@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e121]
+        - cell "•••••••• Exibir senha Copiar senha" [ref=e37]
+          - StaticText "••••••••"
+          - button "Exibir senha" [ref=e122]
+          - button "Copiar senha" [ref=e123]
+        - cell
+          - form
+            - combobox "Status da conta" [expanded=false, ref=e215]: Ativo
+              - MenuListPopup
+                - option "Ativo" [selected, ref=e316]
+                - option "Nunca teve" [ref=e317]
+                - option "Teve, mas inativo" [ref=e318]
+            - button "Copiar status" [ref=e216]
+        - cell
+          - form
+            - LabelText [ref=e217] clickable [cursor:pointer]
+              - checkbox "Cadastrada" [checked=true, ref=e286]
+            - button "Copiar cadastro" [ref=e218]
+        - cell "Em dia Política" [ref=e38]
+          - StaticText "Em dia"
+          - group
+            - DisclosureTriangle "Política" [expanded=false]
+              - StaticText "Política"
+        - cell "Editar conta" [ref=e39]
+          - button "Editar conta" [ref=e124]
+          - form
+            - button "Excluir conta" [ref=e219]
+      - row
+        - cell "Selecionar logistica@empresa-exemplo.com.br" [ref=e40]
+          - checkbox "Selecionar logistica@empresa-exemplo.com.br" [checked=false, ref=e125]
+        - cell "Detalhes da conta logistica@empresa-exemplo.com.br Copiar e-mail" [ref=e41]
+          - button "Detalhes da conta" [expanded=false, ref=e126]
+          - StaticText "logistica@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e127]
+        - cell "•••••••• Exibir senha Copiar senha" [ref=e42]
+          - StaticText "••••••••"
+          - button "Exibir senha" [ref=e128]
+          - button "Copiar senha" [ref=e129]
+        - cell
+          - form
+            - combobox "Status da conta" [expanded=false, ref=e220]: Ativo
+              - MenuListPopup
+                - option "Ativo" [selected, ref=e319]
+                - option "Nunca teve" [ref=e320]
+                - option "Teve, mas inativo" [ref=e321]
+            - button "Copiar status" [ref=e221]
+        - cell
+          - form
+            - LabelText [ref=e222] clickable [cursor:pointer]
+              - checkbox "Cadastrada" [checked=true, ref=e287]
+            - button "Copiar cadastro" [ref=e223]
+        - cell "Em dia Política" [ref=e43]
+          - StaticText "Em dia"
+          - group
+            - DisclosureTriangle "Política" [expanded=false]
+              - StaticText "Política"
+        - cell "Editar conta" [ref=e44]
+          - button "Editar conta" [ref=e130]
+          - form
+            - button "Excluir conta" [ref=e224]
+      - row
+        - cell "Selecionar marketing@empresa-exemplo.com.br" [ref=e45]
+          - checkbox "Selecionar marketing@empresa-exemplo.com.br" [checked=false, ref=e131]
+        - cell "Detalhes da conta marketing@empresa-exemplo.com.br Copiar e-mail" [ref=e46]
+          - button "Detalhes da conta" [expanded=false, ref=e132]
+          - StaticText "marketing@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e133]
+        - cell "•••••••• Exibir senha Copiar senha" [ref=e47]
+          - StaticText "••••••••"
+          - button "Exibir senha" [ref=e134]
+          - button "Copiar senha" [ref=e135]
+        - cell
+          - form
+            - combobox "Status da conta" [expanded=false, ref=e225]: Ativo
+              - MenuListPopup
+                - option "Ativo" [selected, ref=e322]
+                - option "Nunca teve" [ref=e323]
+                - option "Teve, mas inativo" [ref=e324]
+            - button "Copiar status" [ref=e226]
+        - cell
+          - form
+            - LabelText [ref=e227] clickable [cursor:pointer]
+              - checkbox "Cadastrada" [checked=false, ref=e288]
+            - button "Copiar cadastro" [ref=e228]
+        - cell "Vencida Política" [ref=e48]
+          - StaticText "Vencida"
+          - group
+            - DisclosureTriangle "Política" [expanded=false]
+              - StaticText "Política"
+        - cell "Editar conta" [ref=e49]
+          - button "Editar conta" [ref=e136]
+          - form
+            - button "Excluir conta" [ref=e229]
+      - row
+        - cell "Selecionar rh@empresa-exemplo.com.br" [ref=e50]
+          - checkbox "Selecionar rh@empresa-exemplo.com.br" [checked=false, ref=e137]
+        - cell "Detalhes da conta rh@empresa-exemplo.com.br Copiar e-mail" [ref=e51]
+          - button "Detalhes da conta" [expanded=false, ref=e138]
+          - StaticText "rh@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e139]
+        - cell "•••••••• Exibir senha Copiar senha" [ref=e52]
+          - StaticText "••••••••"
+          - button "Exibir senha" [ref=e140]
+          - button "Copiar senha" [ref=e141]
+        - cell
+          - form
+            - combobox "Status da conta" [expanded=false, ref=e230]: Ativo
+              - MenuListPopup
+                - option "Ativo" [selected, ref=e325]
+                - option "Nunca teve" [ref=e326]
+                - option "Teve, mas inativo" [ref=e327]
+            - button "Copiar status" [ref=e231]
+        - cell
+          - form
+            - LabelText [ref=e232] clickable [cursor:pointer]
+              - checkbox "Cadastrada" [checked=true, ref=e289]
+            - button "Copiar cadastro" [ref=e233]
+        - cell "Vence em breve Política" [ref=e53]
+          - StaticText "Vence em breve"
+          - group
+            - DisclosureTriangle "Política" [expanded=false]
+              - StaticText "Política"
+        - cell "Editar conta" [ref=e54]
+          - button "Editar conta" [ref=e142]
+          - form
+            - button "Excluir conta" [ref=e234]
+      - row
+        - cell "Selecionar compras@empresa-exemplo.com.br" [ref=e55]
+          - checkbox "Selecionar compras@empresa-exemplo.com.br" [checked=false, ref=e143]
+        - cell "Detalhes da conta compras@empresa-exemplo.com.br Copiar e-mail" [ref=e56]
+          - button "Detalhes da conta" [expanded=false, ref=e144]
+          - StaticText "compras@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e145]
+        - cell "•••••••• Exibir senha Copiar senha" [ref=e57]
+          - StaticText "••••••••"
+          - button "Exibir senha" [ref=e146]
+          - button "Copiar senha" [ref=e147]
+        - cell
+          - form
+            - combobox "Status da conta" [expanded=false, ref=e235]: Nunca teve
+              - MenuListPopup
+                - option "Ativo" [ref=e328]
+                - option "Nunca teve" [selected, ref=e329]
+                - option "Teve, mas inativo" [ref=e330]
+            - button "Copiar status" [ref=e236]
+        - cell
+          - form
+            - LabelText [ref=e237] clickable [cursor:pointer]
+              - checkbox "Cadastrada" [checked=false, ref=e290]
+            - button "Copiar cadastro" [ref=e238]
+        - cell "Em dia Política" [ref=e58]
+          - StaticText "Em dia"
+          - group
+            - DisclosureTriangle "Política" [expanded=false]
+              - StaticText "Política"
+        - cell "Editar conta" [ref=e59]
+          - button "Editar conta" [ref=e148]
+          - form
+            - button "Excluir conta" [ref=e239]
+      - row
+        - cell "Selecionar diretoria.financeira@empresa-exemplo.com.br" [ref=e60]
+          - checkbox "Selecionar diretoria.financeira@empresa-exemplo.com.br" [checked=false, ref=e149]
+        - cell "Detalhes da conta diretoria.financeira@empresa-exemplo.com.br Copiar e-mail" [ref=e61]
+          - button "Detalhes da conta" [expanded=false, ref=e150]
+          - StaticText "diretoria.financeira@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e151]
+        - cell "•••••••• Exibir senha Copiar senha" [ref=e62]
+          - StaticText "••••••••"
+          - button "Exibir senha" [ref=e152]
+          - button "Copiar senha" [ref=e153]
+        - cell
+          - form
+            - combobox "Status da conta" [expanded=false, ref=e240]: Nunca teve
+              - MenuListPopup
+                - option "Ativo" [ref=e331]
+                - option "Nunca teve" [selected, ref=e332]
+                - option "Teve, mas inativo" [ref=e333]
+            - button "Copiar status" [ref=e241]
+        - cell
+          - form
+            - LabelText [ref=e242] clickable [cursor:pointer]
+              - checkbox "Cadastrada" [checked=true, ref=e291]
+            - button "Copiar cadastro" [ref=e243]
+        - cell "Em dia Política" [ref=e63]
+          - StaticText "Em dia"
+          - group
+            - DisclosureTriangle "Política" [expanded=false]
+              - StaticText "Política"
+        - cell "Editar conta" [ref=e64]
+          - button "Editar conta" [ref=e154]
+          - form
+            - button "Excluir conta" [ref=e244]
+      - row
+        - cell "Selecionar qualidade@empresa-exemplo.com.br" [ref=e65]
+          - checkbox "Selecionar qualidade@empresa-exemplo.com.br" [checked=false, ref=e155]
+        - cell "Detalhes da conta qualidade@empresa-exemplo.com.br Copiar e-mail" [ref=e66]
+          - button "Detalhes da conta" [expanded=false, ref=e156]
+          - StaticText "qualidade@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e157]
+        - cell "•••••••• Exibir senha Copiar senha" [ref=e67]
+          - StaticText "••••••••"
+          - button "Exibir senha" [ref=e158]
+          - button "Copiar senha" [ref=e159]
+        - cell
+          - form
+            - combobox "Status da conta" [expanded=false, ref=e245]: Nunca teve
+              - MenuListPopup
+                - option "Ativo" [ref=e334]
+                - option "Nunca teve" [selected, ref=e335]
+                - option "Teve, mas inativo" [ref=e336]
+            - button "Copiar status" [ref=e246]
+        - cell
+          - form
+            - LabelText [ref=e247] clickable [cursor:pointer]
+              - checkbox "Cadastrada" [checked=false, ref=e292]
+            - button "Copiar cadastro" [ref=e248]
+        - cell "Em dia Política" [ref=e68]
+          - StaticText "Em dia"
+          - group
+            - DisclosureTriangle "Política" [expanded=false]
+              - StaticText "Política"
+        - cell "Editar conta" [ref=e69]
+          - button "Editar conta" [ref=e160]
+          - form
+            - button "Excluir conta" [ref=e249]
+      - row
+        - cell "Selecionar seguranca@empresa-exemplo.com.br" [ref=e70]
+          - checkbox "Selecionar seguranca@empresa-exemplo.com.br" [checked=false, ref=e161]
+        - cell "Detalhes da conta seguranca@empresa-exemplo.com.br Copiar e-mail" [ref=e71]
+          - button "Detalhes da conta" [expanded=false, ref=e162]
+          - StaticText "seguranca@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e163]
+        - cell "•••••••• Exibir senha Copiar senha" [ref=e72]
+          - StaticText "••••••••"
+          - button "Exibir senha" [ref=e164]
+          - button "Copiar senha" [ref=e165]
+        - cell
+          - form
+            - combobox "Status da conta" [expanded=false, ref=e250]: Nunca teve
+              - MenuListPopup
+                - option "Ativo" [ref=e337]
+                - option "Nunca teve" [selected, ref=e338]
+                - option "Teve, mas inativo" [ref=e339]
+            - button "Copiar status" [ref=e251]
+        - cell
+          - form
+            - LabelText [ref=e252] clickable [cursor:pointer]
+              - checkbox "Cadastrada" [checked=true, ref=e293]
+            - button "Copiar cadastro" [ref=e253]
+        - cell "Em dia Política" [ref=e73]
+          - StaticText "Em dia"
+          - group
+            - DisclosureTriangle "Política" [expanded=false]
+              - StaticText "Política"
+        - cell "Editar conta" [ref=e74]
+          - button "Editar conta" [ref=e166]
+          - form
+            - button "Excluir conta" [ref=e254]
+      - row
+        - cell "Selecionar suporte.nivel2@empresa-exemplo.com.br" [ref=e75]
+          - checkbox "Selecionar suporte.nivel2@empresa-exemplo.com.br" [checked=false, ref=e167]
+        - cell "Detalhes da conta suporte.nivel2@empresa-exemplo.com.br Copiar e-mail" [ref=e76]
+          - button "Detalhes da conta" [expanded=false, ref=e168]
+          - StaticText "suporte.nivel2@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e169]
+        - cell "•••••••• Exibir senha Copiar senha" [ref=e77]
+          - StaticText "••••••••"
+          - button "Exibir senha" [ref=e170]
+          - button "Copiar senha" [ref=e171]
+        - cell
+          - form
+            - combobox "Status da conta" [expanded=false, ref=e255]: Nunca teve
+              - MenuListPopup
+                - option "Ativo" [ref=e340]
+                - option "Nunca teve" [selected, ref=e341]
+                - option "Teve, mas inativo" [ref=e342]
+            - button "Copiar status" [ref=e256]
+        - cell
+          - form
+            - LabelText [ref=e257] clickable [cursor:pointer]
+              - checkbox "Cadastrada" [checked=true, ref=e294]
+            - button "Copiar cadastro" [ref=e258]
+        - cell "Em dia Política" [ref=e78]
+          - StaticText "Em dia"
+          - group
+            - DisclosureTriangle "Política" [expanded=false]
+              - StaticText "Política"
+        - cell "Editar conta" [ref=e79]
+          - button "Editar conta" [ref=e172]
+          - form
+            - button "Excluir conta" [ref=e259]
+      - row
+        - cell "Selecionar auditoria@empresa-exemplo.com.br" [ref=e80]
+          - checkbox "Selecionar auditoria@empresa-exemplo.com.br" [checked=false, ref=e173]
+        - cell "Detalhes da conta auditoria@empresa-exemplo.com.br Copiar e-mail" [ref=e81]
+          - button "Detalhes da conta" [expanded=false, ref=e174]
+          - StaticText "auditoria@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e175]
+        - cell "•••••••• Exibir senha Copiar senha" [ref=e82]
+          - StaticText "••••••••"
+          - button "Exibir senha" [ref=e176]
+          - button "Copiar senha" [ref=e177]
+        - cell
+          - form
+            - combobox "Status da conta" [expanded=false, ref=e260]: Teve, mas inativo
+              - MenuListPopup
+                - option "Ativo" [ref=e343]
+                - option "Nunca teve" [ref=e344]
+                - option "Teve, mas inativo" [selected, ref=e345]
+            - button "Copiar status" [ref=e261]
+        - cell
+          - form
+            - LabelText [ref=e262] clickable [cursor:pointer]
+              - checkbox "Cadastrada" [checked=false, ref=e295]
+            - button "Copiar cadastro" [ref=e263]
+        - cell "Em dia Política" [ref=e83]
+          - StaticText "Em dia"
+          - group
+            - DisclosureTriangle "Política" [expanded=false]
+              - StaticText "Política"
+        - cell "Editar conta" [ref=e84]
+          - button "Editar conta" [ref=e178]
+          - form
+            - button "Excluir conta" [ref=e264]
+      - row
+        - cell "Selecionar contabilidade.terceirizada.matriz@empresa-exemplo-com-nome-longo.com.br" [ref=e85]
+          - checkbox "Selecionar contabilidade.terceirizada.matriz@empresa-exemplo-com-nome-longo.com.br" [checked=false, ref=e179]
+        - cell "Detalhes da conta contabilidade.terceirizada.matriz@empresa-exemplo-com-nome-longo.com.br Copiar e-mail" [ref=e86]
+          - button "Detalhes da conta" [expanded=false, ref=e180]
+          - StaticText "contabilidade.terceirizada.matriz@empresa-exemplo-com-nome-longo.com.br"
+          - button "Copiar e-mail" [ref=e181]
+        - cell "•••••••• Exibir senha Copiar senha" [ref=e87]
+          - StaticText "••••••••"
+          - button "Exibir senha" [ref=e182]
+          - button "Copiar senha" [ref=e183]
+        - cell
+          - form
+            - combobox "Status da conta" [expanded=false, ref=e265]: Teve, mas inativo
+              - MenuListPopup
+                - option "Ativo" [ref=e346]
+                - option "Nunca teve" [ref=e347]
+                - option "Teve, mas inativo" [selected, ref=e348]
+            - button "Copiar status" [ref=e266]
+        - cell
+          - form
+            - LabelText [ref=e267] clickable [cursor:pointer]
+              - checkbox "Cadastrada" [checked=false, ref=e296]
+            - button "Copiar cadastro" [ref=e268]
+        - cell "Em dia Política" [ref=e88]
+          - StaticText "Em dia"
+          - group
+            - DisclosureTriangle "Política" [expanded=false]
+              - StaticText "Política"
+        - cell "Editar conta" [ref=e89]
+          - button "Editar conta" [ref=e184]
+          - form
+            - button "Excluir conta" [ref=e269]
+      - row
+        - cell "Selecionar juridico@empresa-exemplo.com.br" [ref=e90]
+          - checkbox "Selecionar juridico@empresa-exemplo.com.br" [checked=false, ref=e185]
+        - cell "Detalhes da conta juridico@empresa-exemplo.com.br Copiar e-mail" [ref=e91]
+          - button "Detalhes da conta" [expanded=false, ref=e186]
+          - StaticText "juridico@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e187]
+        - cell "•••••••• Exibir senha Copiar senha" [ref=e92]
+          - StaticText "••••••••"
+          - button "Exibir senha" [ref=e188]
+          - button "Copiar senha" [ref=e189]
+        - cell
+          - form
+            - combobox "Status da conta" [expanded=false, ref=e270]: Teve, mas inativo
+              - MenuListPopup
+                - option "Ativo" [ref=e349]
+                - option "Nunca teve" [ref=e350]
+                - option "Teve, mas inativo" [selected, ref=e351]
+            - button "Copiar status" [ref=e271]
+        - cell
+          - form
+            - LabelText [ref=e272] clickable [cursor:pointer]
+              - checkbox "Cadastrada" [checked=true, ref=e297]
+            - button "Copiar cadastro" [ref=e273]
+        - cell "Em dia Política" [ref=e93]
+          - StaticText "Em dia"
+          - group
+            - DisclosureTriangle "Política" [expanded=false]
+              - StaticText "Política"
+        - cell "Editar conta" [ref=e94]
+          - button "Editar conta" [ref=e190]
+          - form
+            - button "Excluir conta" [ref=e274]
+      - row
+        - cell "Selecionar operacoes@empresa-exemplo.com.br" [ref=e95]
+          - checkbox "Selecionar operacoes@empresa-exemplo.com.br" [checked=false, ref=e191]
+        - cell "Detalhes da conta operacoes@empresa-exemplo.com.br Copiar e-mail" [ref=e96]
+          - button "Detalhes da conta" [expanded=false, ref=e192]
+          - StaticText "operacoes@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e193]
+        - cell "•••••••• Exibir senha Copiar senha" [ref=e97]
+          - StaticText "••••••••"
+          - button "Exibir senha" [ref=e194]
+          - button "Copiar senha" [ref=e195]
+        - cell
+          - form
+            - combobox "Status da conta" [expanded=false, ref=e275]: Teve, mas inativo
+              - MenuListPopup
+                - option "Ativo" [ref=e352]
+                - option "Nunca teve" [ref=e353]
+                - option "Teve, mas inativo" [selected, ref=e354]
+            - button "Copiar status" [ref=e276]
+        - cell
+          - form
+            - LabelText [ref=e277] clickable [cursor:pointer]
+              - checkbox "Cadastrada" [checked=true, ref=e298]
+            - button "Copiar cadastro" [ref=e278]
+        - cell "Em dia Política" [ref=e98]
+          - StaticText "Em dia"
+          - group
+            - DisclosureTriangle "Política" [expanded=false]
+              - StaticText "Política"
+        - cell "Editar conta" [ref=e99]
+          - button "Editar conta" [ref=e196]
+          - form
+            - button "Excluir conta" [ref=e279]
+      - row
+        - cell "Selecionar ti@empresa-exemplo.com.br" [ref=e100]
+          - checkbox "Selecionar ti@empresa-exemplo.com.br" [checked=false, ref=e197]
+        - cell "Detalhes da conta ti@empresa-exemplo.com.br Copiar e-mail" [ref=e101]
+          - button "Detalhes da conta" [expanded=false, ref=e198]
+          - StaticText "ti@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e199]
+        - cell "•••••••• Exibir senha Copiar senha" [ref=e102]
+          - StaticText "••••••••"
+          - button "Exibir senha" [ref=e200]
+          - button "Copiar senha" [ref=e201]
+        - cell
+          - form
+            - combobox "Status da conta" [expanded=false, ref=e280]: Teve, mas inativo
+              - MenuListPopup
+                - option "Ativo" [ref=e355]
+                - option "Nunca teve" [ref=e356]
+                - option "Teve, mas inativo" [selected, ref=e357]
+            - button "Copiar status" [ref=e281]
+        - cell
+          - form
+            - LabelText [ref=e282] clickable [cursor:pointer]
+              - checkbox "Cadastrada" [checked=false, ref=e299]
+            - button "Copiar cadastro" [ref=e283]
+        - cell "Em dia Política" [ref=e103]
+          - StaticText "Em dia"
+          - group
+            - DisclosureTriangle "Política" [expanded=false]
+              - StaticText "Política"
+        - cell "Editar conta" [ref=e104]
+          - button "Editar conta" [ref=e202]
+          - form
+            - button "Excluir conta" [ref=e284]
+    - navigation "Paginação de contas" [ref=e19]
+      - StaticText "Mostrando 15 conta(s) nesta página"

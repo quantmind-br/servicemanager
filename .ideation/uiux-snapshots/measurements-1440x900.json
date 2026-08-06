@@ -1,0 +1,49 @@
+{
+  "contraste_texto": {
+    "muted_hint_.muted-hint_em_bg-elev": { "cor": "#6e7a87", "fundo": "rgb(21,27,36)", "px": 13.1, "razao": 3.95, "limite": 4.5, "resultado": "falha" },
+    "placeholder_input::placeholder_em_bg-input": { "cor": "#6e7a87", "fundo": "rgb(17,24,31)", "px": 12.5, "razao": 4.08, "limite": 4.5, "resultado": "falha" },
+    "status_pill_ativo": { "razao": 5.43, "limite": 4.5, "resultado": "passa" },
+    "status_pill_nunca": { "razao": 5.92, "limite": 4.5, "resultado": "passa" },
+    "status_pill_inativo": { "razao": 5.44, "limite": 4.5, "resultado": "passa" },
+    "rotacao_em_dia": { "razao": 5.43, "limite": 4.5, "resultado": "passa" },
+    "rotacao_vence_em_breve": { "razao": 6.62, "limite": 4.5, "resultado": "passa" },
+    "rotacao_vencida": { "razao": 6.07, "limite": 4.5, "resultado": "passa" },
+    "email_da_conta": { "razao": 14.64, "limite": 4.5, "resultado": "passa" },
+    "chip_selecionado_texto_branco": { "razao": 4.81, "limite": 4.5, "resultado": "passa" },
+    "botao_excluir_servico": { "razao": 4.61, "limite": 4.5, "resultado": "passa" }
+  },
+  "contraste_nao_textual": {
+    "borda_input_e_select_--border_em_bg-elev-2": { "cor": "#2a3340", "razao": 1.25, "limite": 3, "resultado": "falha" },
+    "borda_icon-button_copy-button_expand-btn_chip_em_bg-elev": { "cor": "#2a3340", "razao": 1.36, "limite": 3, "resultado": "falha" },
+    "trilha_toggle_desligado_--border-strong": { "cor": "#3c4658", "razao": 1.82, "limite": 3, "resultado": "falha" },
+    "trilha_toggle_ligado_--accent-strong": { "cor": "#2f6fd6", "razao": 3.6, "limite": 3, "resultado": "passa" },
+    "icone_dentro_dos_botoes_--muted": { "cor": "#9aa6b2", "razao": 6.98, "limite": 3, "resultado": "passa" }
+  },
+  "tamanho_de_alvo_wcag_2_5_8": {
+    "alvos_interativos_na_pagina_inicial": 266,
+    "alvos_menores_que_24x24": 23,
+    "falhas_apos_excecao_de_espacamento": 0,
+    "observacao": "checkbox .row-select e #select-visible medem 16x16 CSS px; passam por espacamento, nao por tamanho"
+  },
+  "reflow_e_layout": {
+    "390x844_document_scrollWidth": 439,
+    "390x844_document_clientWidth": 390,
+    "390x844_elemento_que_transborda": "a.chip 'Banco do Brasil - Portal Empresarial de Gestao de Contas' (410px, right=439)",
+    "720x450_equivalente_a_200pct_zoom_overflow": "nenhum",
+    "altura_header_sticky_390x844": "153px (18.2% da viewport)",
+    "deslocamento_ao_selecionar_linha_1440x900": "linha desce 171px; barra em massa mede 155px de altura",
+    "service_access_1440x900": { "wrap_clientWidth": 1022, "wrap_scrollWidth": 1378, "px_ocultos": 356, "coluna_banco_do_brasil": 451, "selects_fora_da_area_visivel": 3 },
+    "integrations_cell_actions": { "td_width": 424, "td_content_right": 1331, "wrap_visible_right": 1224, "botoes_fora_da_area": ["Testar", "Excluir"] },
+    "settings_toggle_inline_checkbox": { "largura_css": "166px", "caixa_pintada": "13x13", "espaco_morto_ate_o_texto": "162px" },
+    "integrations_toggle_inline_checkbox": { "largura_css": "140px" },
+    "integrations_nova_integracao": { "espaco_vertical_vazio": "138px", "criar_button_width": 189, "sobreposicao_com_ultimo_label": "3px" },
+    "coverage_fieldset_hidden": { "atributo_hidden": true, "fieldset_disabled": true, "computed_display": "flex", "caixa_renderizada": "1072x75" },
+    "viewer_td_cell-actions_vazio": { "display": "flex", "caixa": "71x22", "altura_da_linha": 52 }
+  },
+  "teclado": {
+    "filtro_email": "digitar 4 caracteres -> navegacao para ?q=juri -> document.activeElement = BODY",
+    "barra_em_massa": "foco no checkbox da linha -> Space -> Shift+Tab x8 para alcancar 'Excluir selecionadas'",
+    "dialogo_de_edicao": "Enter no lapis -> foco em input[name=email] dentro do dialog; Escape fecha e devolve o foco ao gatilho (correto)",
+    "menu_Administracao_fechado": "nao entra na ordem de tabulacao (correto)"
+  }
+}

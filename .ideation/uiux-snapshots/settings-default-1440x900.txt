@@ -1,0 +1,26 @@
+- link "Ir para o conteúdo" [ref=e1]
+- banner
+  - link "Service Manager" [ref=e2]
+  - StaticText "admin · admin"
+  - group
+    - DisclosureTriangle "Administração" [expanded=false]
+  - link "Visão geral" [ref=e3]
+  - link "Minha conta" [ref=e4]
+  - form
+    - button "Sair" [ref=e5]
+- main
+  - generic
+    - paragraph
+      - StaticText "ADMINISTRAÇÃO"
+    - heading "Configurações" [level=1, ref=e6]
+    - paragraph
+      - StaticText "Controle global de funcionalidades do cofre."
+  - generic
+    - heading "Rotação de credenciais" [level=2, ref=e7]
+    - paragraph
+      - StaticText "Quando desativada, as colunas, filtros, política e conclusão de rotação ficam ocultos e os endpoints de rotação retornam 404. As datas de troca de senha continuam sendo registradas normalmente, de modo que reativar retoma o controle a partir do histórico real."
+    - form
+      - LabelText
+        - checkbox "Habilitar controle de rotação de credenciais" [checked=true, ref=e9]
+        - StaticText "Habilitar controle de rotação de credenciais"
+      - button "Salvar" [ref=e8]

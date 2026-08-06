@@ -1,0 +1,71 @@
+- link "Ir para o conteúdo" [ref=e1]
+- banner
+  - link "Service Manager" [ref=e2]
+  - StaticText "admin · admin"
+  - group
+    - DisclosureTriangle "Administração" [expanded=false]
+  - link "Visão geral" [ref=e3]
+  - link "Minha conta" [ref=e4]
+  - form
+    - button "Sair" [ref=e5]
+- main
+  - generic
+    - paragraph
+      - StaticText "ROTAÇÃO DE CREDENCIAIS"
+    - heading "Rotação · AWS Console" [level=1, ref=e6]
+    - paragraph
+      - StaticText "Contas com rotação desconhecida, próxima do vencimento ou vencida neste serviço."
+  - table
+    - rowgroup
+      - row
+        - columnheader "CONTA" [ref=e22]
+        - columnheader "ÚLTIMA TROCA" [ref=e23]
+        - columnheader "POLÍTICA" [ref=e24]
+        - columnheader "VENCIMENTO" [ref=e25]
+        - columnheader "ESTADO" [ref=e26]
+        - columnheader "CONCLUIR" [ref=e27]
+    - row
+      - rowheader "contabilidade.terceirizada.matriz@empresa-exemplo-com-nome-longo.com.br" [ref=e7]
+      - cell "2026-07-01T10:00:00Z" [ref=e8]
+      - cell "60 dias" [ref=e9]
+      - cell "2026-08-02 (3d)" [ref=e10]
+      - cell "Vence em breve" [ref=e11]
+      - cell
+        - form
+          - LabelText
+            - StaticText "Nova senha"
+            - textbox "Nova senha Mostrar senha" [required, ref=e34]
+            - button "Mostrar senha" [ref=e35]
+          - button "Concluir rotação" [ref=e28]
+        - form
+          - button "Marcar pendente" [ref=e29]
+    - row
+      - rowheader "operacoes@empresa-exemplo.com.br" [ref=e12]
+      - cell "2026-07-01T10:00:00Z" [ref=e13]
+      - cell "60 dias" [ref=e14]
+      - cell "2026-07-18 (-12d)" [ref=e15]
+      - cell "Vencida" [ref=e16]
+      - cell
+        - form
+          - LabelText
+            - StaticText "Nova senha"
+            - textbox "Nova senha Mostrar senha" [required, ref=e36]
+            - button "Mostrar senha" [ref=e37]
+          - button "Concluir rotação" [ref=e30]
+        - form
+          - button "Marcar pendente" [ref=e31]
+    - row
+      - rowheader "ti@empresa-exemplo.com.br" [ref=e17]
+      - cell "2026-07-01T10:00:00Z" [ref=e18]
+      - cell "60 dias" [ref=e19]
+      - cell "2026-07-28 (-2d)" [ref=e20]
+      - cell "Vencida" [ref=e21]
+      - cell
+        - form
+          - LabelText
+            - StaticText "Nova senha"
+            - textbox "Nova senha Mostrar senha" [required, ref=e38]
+            - button "Mostrar senha" [ref=e39]
+          - button "Concluir rotação" [ref=e32]
+        - form
+          - button "Marcar pendente" [ref=e33]

@@ -1,0 +1,23 @@
+- link "Ir para o conteúdo" [ref=e1]
+- banner
+  - link "Service Manager" [ref=e2]
+  - StaticText "admin · admin"
+  - group
+    - DisclosureTriangle "Administração" [expanded=false]
+  - link "Visão geral" [ref=e3]
+  - link "Minha conta" [ref=e4]
+  - form
+    - button "Sair" [ref=e5]
+- main
+  - generic
+    - paragraph
+      - StaticText "CONFIRMAÇÃO NECESSÁRIA"
+    - heading "Confirme sua identidade" [level=1, ref=e6]
+    - paragraph
+      - StaticText "A confirmação autoriza revelações por cinco minutos."
+    - form
+      - LabelText
+        - StaticText "Senha atual"
+        - textbox "Senha atual Mostrar senha" [required, ref=e8]
+        - button "Mostrar senha" [ref=e9]
+      - button "Confirmar" [ref=e7]

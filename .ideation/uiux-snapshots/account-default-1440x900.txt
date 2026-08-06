@@ -1,0 +1,40 @@
+- link "Ir para o conteúdo" [ref=e1]
+- banner
+  - link "Service Manager" [ref=e2]
+  - StaticText "admin · admin"
+  - group
+    - DisclosureTriangle "Administração" [expanded=false]
+  - link "Visão geral" [ref=e3]
+  - link "Minha conta" [ref=e4]
+  - form
+    - button "Sair" [ref=e5]
+- main
+  - generic
+    - paragraph
+      - StaticText "MINHA CONTA"
+    - heading "Gerencie seu acesso" [level=1, ref=e6]
+    - paragraph
+      - StaticText "Login atual: "
+      - strong
+        - StaticText "admin"
+    - form
+      - heading "Alterar login" [level=2, ref=e7]
+      - LabelText
+        - StaticText "Senha atual"
+        - textbox "Senha atual Mostrar senha" [required, ref=e11]
+        - button "Mostrar senha" [ref=e12]
+      - LabelText
+        - StaticText "Novo login"
+        - textbox "Novo login" [required, ref=e13]
+      - button "Salvar login" [ref=e8]
+    - form
+      - heading "Alterar senha" [level=2, ref=e9]
+      - LabelText
+        - StaticText "Senha atual"
+        - textbox "Senha atual Mostrar senha" [required, ref=e14]
+        - button "Mostrar senha" [ref=e15]
+      - LabelText
+        - StaticText "Nova senha"
+        - textbox "Nova senha Mostrar senha" [required, ref=e16]
+        - button "Mostrar senha" [ref=e17]
+      - button "Salvar senha" [ref=e10]

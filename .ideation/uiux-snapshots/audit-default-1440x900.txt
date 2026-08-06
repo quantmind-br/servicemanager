@@ -1,0 +1,425 @@
+- link "Ir para o conteúdo" [ref=e1]
+- banner
+  - link "Service Manager" [ref=e2]
+  - StaticText "admin · admin"
+  - group
+    - DisclosureTriangle "Administração" [expanded=false]
+  - link "Visão geral" [ref=e3]
+  - link "Minha conta" [ref=e4]
+  - form
+    - button "Sair" [ref=e5]
+- main
+  - generic
+    - paragraph
+      - StaticText "ADMINISTRAÇÃO"
+    - heading "Auditoria" [level=1, ref=e6]
+    - generic
+      - StaticText "Cadeia íntegra"
+  - form
+    - LabelText
+      - StaticText "Ação"
+      - textbox "Ação" [ref=e11]
+    - LabelText
+      - StaticText "Tipo de alvo"
+      - textbox "Tipo de alvo" [ref=e12]
+    - LabelText
+      - StaticText "ID do usuário"
+      - spinbutton "ID do usuário" [ref=e13]
+    - LabelText
+      - StaticText "Desde"
+      - Date "Desde"
+        - generic
+          - spinbutton "Dia Dia" [ref=e332]: 0
+            - StaticText "dd"
+          - StaticText "/"
+          - spinbutton "Mês Mês" [ref=e333]: 0
+            - StaticText "mm"
+          - StaticText "/"
+          - spinbutton "Ano Ano" [ref=e334]: 0
+            - StaticText "aaaa"
+        - button "Mostrar seletor de datas" [ref=e323]
+    - LabelText
+      - StaticText "Até"
+      - Date "Até"
+        - generic
+          - spinbutton "Dia Dia" [ref=e335]: 0
+            - StaticText "dd"
+          - StaticText "/"
+          - spinbutton "Mês Mês" [ref=e336]: 0
+            - StaticText "mm"
+          - StaticText "/"
+          - spinbutton "Ano Ano" [ref=e337]: 0
+            - StaticText "aaaa"
+        - button "Mostrar seletor de datas" [ref=e324]
+    - LabelText
+      - StaticText "IP"
+      - textbox "IP" [ref=e14]
+    - button "Filtrar" [ref=e9]
+    - link "Exportar CSV" [ref=e10]
+  - generic
+    - heading "Eventos" [level=2, ref=e7]
+    - paragraph
+      - StaticText "Página 1"
+    - table
+      - rowgroup
+        - row
+          - columnheader "ID" [ref=e325]
+          - columnheader "DATA" [ref=e326]
+          - columnheader "USUÁRIO" [ref=e327]
+          - columnheader "AÇÃO" [ref=e328]
+          - columnheader "ALVO" [ref=e329]
+          - columnheader "METADADOS" [ref=e330]
+          - columnheader "IP" [ref=e331]
+      - row
+        - cell "44" [ref=e15]
+        - cell "2026-07-30T08:15:01.902281+00:00" [ref=e16]
+        - cell "admin" [ref=e17]
+        - cell "reauth" [ref=e18]
+        - cell "user:1" [ref=e19]
+        - cell "{}" [ref=e20]
+        - cell "127.0.0.1" [ref=e21]
+      - row
+        - cell "43" [ref=e22]
+        - cell "2026-07-30T08:06:40.100943+00:00" [ref=e23]
+        - cell "admin" [ref=e24]
+        - cell "login.succeeded" [ref=e25]
+        - cell "user:1" [ref=e26]
+        - cell "{}" [ref=e27]
+        - cell "127.0.0.1" [ref=e28]
+      - row
+        - cell "42" [ref=e29]
+        - cell "2026-07-30T08:06:23.101835+00:00" [ref=e30]
+        - cell "sistema" [ref=e31]
+        - cell "login_failure" [ref=e32]
+        - cell "user" [ref=e33]
+        - cell "{\"username_present\":true}" [ref=e34]
+        - cell "127.0.0.1" [ref=e35]
+      - row
+        - cell "41" [ref=e36]
+        - cell "2026-07-30T08:05:20.380521+00:00" [ref=e37]
+        - cell "admin" [ref=e38]
+        - cell "user.role_change" [ref=e39]
+        - cell "user:5" [ref=e40]
+        - cell "{\"exemplo\":true,\"indice\":39}" [ref=e41]
+        - cell "127.0.0.1" [ref=e42]
+      - row
+        - cell "40" [ref=e43]
+        - cell "2026-07-30T08:05:20.380511+00:00" [ref=e44]
+        - cell "admin" [ref=e45]
+        - cell "password.reveal" [ref=e46]
+        - cell "account:4" [ref=e47]
+        - cell "{\"exemplo\":true,\"indice\":38}" [ref=e48]
+        - cell "127.0.0.1" [ref=e49]
+      - row
+        - cell "39" [ref=e50]
+        - cell "2026-07-30T08:05:20.380501+00:00" [ref=e51]
+        - cell "admin" [ref=e52]
+        - cell "service.create" [ref=e53]
+        - cell "service:3" [ref=e54]
+        - cell "{\"exemplo\":true,\"indice\":37}" [ref=e55]
+        - cell "127.0.0.1" [ref=e56]
+      - row
+        - cell "38" [ref=e57]
+        - cell "2026-07-30T08:05:20.380490+00:00" [ref=e58]
+        - cell "admin" [ref=e59]
+        - cell "account.update" [ref=e60]
+        - cell "account:2" [ref=e61]
+        - cell "{\"exemplo\":true,\"indice\":36}" [ref=e62]
+        - cell "127.0.0.1" [ref=e63]
+      - row
+        - cell "37" [ref=e64]
+        - cell "2026-07-30T08:05:20.380479+00:00" [ref=e65]
+        - cell "admin" [ref=e66]
+        - cell "account.create" [ref=e67]
+        - cell "account:1" [ref=e68]
+        - cell "{\"exemplo\":true,\"indice\":35}" [ref=e69]
+        - cell "127.0.0.1" [ref=e70]
+      - row
+        - cell "36" [ref=e71]
+        - cell "2026-07-30T08:05:20.380469+00:00" [ref=e72]
+        - cell "admin" [ref=e73]
+        - cell "user.role_change" [ref=e74]
+        - cell "user:7" [ref=e75]
+        - cell "{\"exemplo\":true,\"indice\":34}" [ref=e76]
+        - cell "127.0.0.1" [ref=e77]
+      - row
+        - cell "35" [ref=e78]
+        - cell "2026-07-30T08:05:20.380459+00:00" [ref=e79]
+        - cell "admin" [ref=e80]
+        - cell "password.reveal" [ref=e81]
+        - cell "account:6" [ref=e82]
+        - cell "{\"exemplo\":true,\"indice\":33}" [ref=e83]
+        - cell "127.0.0.1" [ref=e84]
+      - row
+        - cell "34" [ref=e85]
+        - cell "2026-07-30T08:05:20.380449+00:00" [ref=e86]
+        - cell "admin" [ref=e87]
+        - cell "service.create" [ref=e88]
+        - cell "service:5" [ref=e89]
+        - cell "{\"exemplo\":true,\"indice\":32}" [ref=e90]
+        - cell "127.0.0.1" [ref=e91]
+      - row
+        - cell "33" [ref=e92]
+        - cell "2026-07-30T08:05:20.380439+00:00" [ref=e93]
+        - cell "admin" [ref=e94]
+        - cell "account.update" [ref=e95]
+        - cell "account:4" [ref=e96]
+        - cell "{\"exemplo\":true,\"indice\":31}" [ref=e97]
+        - cell "127.0.0.1" [ref=e98]
+      - row
+        - cell "32" [ref=e99]
+        - cell "2026-07-30T08:05:20.380429+00:00" [ref=e100]
+        - cell "admin" [ref=e101]
+        - cell "account.create" [ref=e102]
+        - cell "account:3" [ref=e103]
+        - cell "{\"exemplo\":true,\"indice\":30}" [ref=e104]
+        - cell "127.0.0.1" [ref=e105]
+      - row
+        - cell "31" [ref=e106]
+        - cell "2026-07-30T08:05:20.380419+00:00" [ref=e107]
+        - cell "admin" [ref=e108]
+        - cell "user.role_change" [ref=e109]
+        - cell "user:2" [ref=e110]
+        - cell "{\"exemplo\":true,\"indice\":29}" [ref=e111]
+        - cell "127.0.0.1" [ref=e112]
+      - row
+        - cell "30" [ref=e113]
+        - cell "2026-07-30T08:05:20.380409+00:00" [ref=e114]
+        - cell "admin" [ref=e115]
+        - cell "password.reveal" [ref=e116]
+        - cell "account:1" [ref=e117]
+        - cell "{\"exemplo\":true,\"indice\":28}" [ref=e118]
+        - cell "127.0.0.1" [ref=e119]
+      - row
+        - cell "29" [ref=e120]
+        - cell "2026-07-30T08:05:20.380399+00:00" [ref=e121]
+        - cell "admin" [ref=e122]
+        - cell "service.create" [ref=e123]
+        - cell "service:7" [ref=e124]
+        - cell "{\"exemplo\":true,\"indice\":27}" [ref=e125]
+        - cell "127.0.0.1" [ref=e126]
+      - row
+        - cell "28" [ref=e127]
+        - cell "2026-07-30T08:05:20.380388+00:00" [ref=e128]
+        - cell "admin" [ref=e129]
+        - cell "account.update" [ref=e130]
+        - cell "account:6" [ref=e131]
+        - cell "{\"exemplo\":true,\"indice\":26}" [ref=e132]
+        - cell "127.0.0.1" [ref=e133]
+      - row
+        - cell "27" [ref=e134]
+        - cell "2026-07-30T08:05:20.380378+00:00" [ref=e135]
+        - cell "admin" [ref=e136]
+        - cell "account.create" [ref=e137]
+        - cell "account:5" [ref=e138]
+        - cell "{\"exemplo\":true,\"indice\":25}" [ref=e139]
+        - cell "127.0.0.1" [ref=e140]
+      - row
+        - cell "26" [ref=e141]
+        - cell "2026-07-30T08:05:20.380368+00:00" [ref=e142]
+        - cell "admin" [ref=e143]
+        - cell "user.role_change" [ref=e144]
+        - cell "user:4" [ref=e145]
+        - cell "{\"exemplo\":true,\"indice\":24}" [ref=e146]
+        - cell "127.0.0.1" [ref=e147]
+      - row
+        - cell "25" [ref=e148]
+        - cell "2026-07-30T08:05:20.380357+00:00" [ref=e149]
+        - cell "admin" [ref=e150]
+        - cell "password.reveal" [ref=e151]
+        - cell "account:3" [ref=e152]
+        - cell "{\"exemplo\":true,\"indice\":23}" [ref=e153]
+        - cell "127.0.0.1" [ref=e154]
+      - row
+        - cell "24" [ref=e155]
+        - cell "2026-07-30T08:05:20.380347+00:00" [ref=e156]
+        - cell "admin" [ref=e157]
+        - cell "service.create" [ref=e158]
+        - cell "service:2" [ref=e159]
+        - cell "{\"exemplo\":true,\"indice\":22}" [ref=e160]
+        - cell "127.0.0.1" [ref=e161]
+      - row
+        - cell "23" [ref=e162]
+        - cell "2026-07-30T08:05:20.380337+00:00" [ref=e163]
+        - cell "admin" [ref=e164]
+        - cell "account.update" [ref=e165]
+        - cell "account:1" [ref=e166]
+        - cell "{\"exemplo\":true,\"indice\":21}" [ref=e167]
+        - cell "127.0.0.1" [ref=e168]
+      - row
+        - cell "22" [ref=e169]
+        - cell "2026-07-30T08:05:20.380327+00:00" [ref=e170]
+        - cell "admin" [ref=e171]
+        - cell "account.create" [ref=e172]
+        - cell "account:7" [ref=e173]
+        - cell "{\"exemplo\":true,\"indice\":20}" [ref=e174]
+        - cell "127.0.0.1" [ref=e175]
+      - row
+        - cell "21" [ref=e176]
+        - cell "2026-07-30T08:05:20.380315+00:00" [ref=e177]
+        - cell "admin" [ref=e178]
+        - cell "user.role_change" [ref=e179]
+        - cell "user:6" [ref=e180]
+        - cell "{\"exemplo\":true,\"indice\":19}" [ref=e181]
+        - cell "127.0.0.1" [ref=e182]
+      - row
+        - cell "20" [ref=e183]
+        - cell "2026-07-30T08:05:20.380305+00:00" [ref=e184]
+        - cell "admin" [ref=e185]
+        - cell "password.reveal" [ref=e186]
+        - cell "account:5" [ref=e187]
+        - cell "{\"exemplo\":true,\"indice\":18}" [ref=e188]
+        - cell "127.0.0.1" [ref=e189]
+      - row
+        - cell "19" [ref=e190]
+        - cell "2026-07-30T08:05:20.380294+00:00" [ref=e191]
+        - cell "admin" [ref=e192]
+        - cell "service.create" [ref=e193]
+        - cell "service:4" [ref=e194]
+        - cell "{\"exemplo\":true,\"indice\":17}" [ref=e195]
+        - cell "127.0.0.1" [ref=e196]
+      - row
+        - cell "18" [ref=e197]
+        - cell "2026-07-30T08:05:20.380284+00:00" [ref=e198]
+        - cell "admin" [ref=e199]
+        - cell "account.update" [ref=e200]
+        - cell "account:3" [ref=e201]
+        - cell "{\"exemplo\":true,\"indice\":16}" [ref=e202]
+        - cell "127.0.0.1" [ref=e203]
+      - row
+        - cell "17" [ref=e204]
+        - cell "2026-07-30T08:05:20.380274+00:00" [ref=e205]
+        - cell "admin" [ref=e206]
+        - cell "account.create" [ref=e207]
+        - cell "account:2" [ref=e208]
+        - cell "{\"exemplo\":true,\"indice\":15}" [ref=e209]
+        - cell "127.0.0.1" [ref=e210]
+      - row
+        - cell "16" [ref=e211]
+        - cell "2026-07-30T08:05:20.380258+00:00" [ref=e212]
+        - cell "admin" [ref=e213]
+        - cell "user.role_change" [ref=e214]
+        - cell "user:1" [ref=e215]
+        - cell "{\"exemplo\":true,\"indice\":14}" [ref=e216]
+        - cell "127.0.0.1" [ref=e217]
+      - row
+        - cell "15" [ref=e218]
+        - cell "2026-07-30T08:05:20.380243+00:00" [ref=e219]
+        - cell "admin" [ref=e220]
+        - cell "password.reveal" [ref=e221]
+        - cell "account:7" [ref=e222]
+        - cell "{\"exemplo\":true,\"indice\":13}" [ref=e223]
+        - cell "127.0.0.1" [ref=e224]
+      - row
+        - cell "14" [ref=e225]
+        - cell "2026-07-30T08:05:20.380228+00:00" [ref=e226]
+        - cell "admin" [ref=e227]
+        - cell "service.create" [ref=e228]
+        - cell "service:6" [ref=e229]
+        - cell "{\"exemplo\":true,\"indice\":12}" [ref=e230]
+        - cell "127.0.0.1" [ref=e231]
+      - row
+        - cell "13" [ref=e232]
+        - cell "2026-07-30T08:05:20.380213+00:00" [ref=e233]
+        - cell "admin" [ref=e234]
+        - cell "account.update" [ref=e235]
+        - cell "account:5" [ref=e236]
+        - cell "{\"exemplo\":true,\"indice\":11}" [ref=e237]
+        - cell "127.0.0.1" [ref=e238]
+      - row
+        - cell "12" [ref=e239]
+        - cell "2026-07-30T08:05:20.380198+00:00" [ref=e240]
+        - cell "admin" [ref=e241]
+        - cell "account.create" [ref=e242]
+        - cell "account:4" [ref=e243]
+        - cell "{\"exemplo\":true,\"indice\":10}" [ref=e244]
+        - cell "127.0.0.1" [ref=e245]
+      - row
+        - cell "11" [ref=e246]
+        - cell "2026-07-30T08:05:20.380183+00:00" [ref=e247]
+        - cell "admin" [ref=e248]
+        - cell "user.role_change" [ref=e249]
+        - cell "user:3" [ref=e250]
+        - cell "{\"exemplo\":true,\"indice\":9}" [ref=e251]
+        - cell "127.0.0.1" [ref=e252]
+      - row
+        - cell "10" [ref=e253]
+        - cell "2026-07-30T08:05:20.380168+00:00" [ref=e254]
+        - cell "admin" [ref=e255]
+        - cell "password.reveal" [ref=e256]
+        - cell "account:2" [ref=e257]
+        - cell "{\"exemplo\":true,\"indice\":8}" [ref=e258]
+        - cell "127.0.0.1" [ref=e259]
+      - row
+        - cell "9" [ref=e260]
+        - cell "2026-07-30T08:05:20.380154+00:00" [ref=e261]
+        - cell "admin" [ref=e262]
+        - cell "service.create" [ref=e263]
+        - cell "service:1" [ref=e264]
+        - cell "{\"exemplo\":true,\"indice\":7}" [ref=e265]
+        - cell "127.0.0.1" [ref=e266]
+      - row
+        - cell "8" [ref=e267]
+        - cell "2026-07-30T08:05:20.380139+00:00" [ref=e268]
+        - cell "admin" [ref=e269]
+        - cell "account.update" [ref=e270]
+        - cell "account:7" [ref=e271]
+        - cell "{\"exemplo\":true,\"indice\":6}" [ref=e272]
+        - cell "127.0.0.1" [ref=e273]
+      - row
+        - cell "7" [ref=e274]
+        - cell "2026-07-30T08:05:20.380125+00:00" [ref=e275]
+        - cell "admin" [ref=e276]
+        - cell "account.create" [ref=e277]
+        - cell "account:6" [ref=e278]
+        - cell "{\"exemplo\":true,\"indice\":5}" [ref=e279]
+        - cell "127.0.0.1" [ref=e280]
+      - row
+        - cell "6" [ref=e281]
+        - cell "2026-07-30T08:05:20.380109+00:00" [ref=e282]
+        - cell "admin" [ref=e283]
+        - cell "user.role_change" [ref=e284]
+        - cell "user:5" [ref=e285]
+        - cell "{\"exemplo\":true,\"indice\":4}" [ref=e286]
+        - cell "127.0.0.1" [ref=e287]
+      - row
+        - cell "5" [ref=e288]
+        - cell "2026-07-30T08:05:20.380094+00:00" [ref=e289]
+        - cell "admin" [ref=e290]
+        - cell "password.reveal" [ref=e291]
+        - cell "account:4" [ref=e292]
+        - cell "{\"exemplo\":true,\"indice\":3}" [ref=e293]
+        - cell "127.0.0.1" [ref=e294]
+      - row
+        - cell "4" [ref=e295]
+        - cell "2026-07-30T08:05:20.380077+00:00" [ref=e296]
+        - cell "admin" [ref=e297]
+        - cell "service.create" [ref=e298]
+        - cell "service:3" [ref=e299]
+        - cell "{\"exemplo\":true,\"indice\":2}" [ref=e300]
+        - cell "127.0.0.1" [ref=e301]
+      - row
+        - cell "3" [ref=e302]
+        - cell "2026-07-30T08:05:20.380057+00:00" [ref=e303]
+        - cell "admin" [ref=e304]
+        - cell "account.update" [ref=e305]
+        - cell "account:2" [ref=e306]
+        - cell "{\"exemplo\":true,\"indice\":1}" [ref=e307]
+        - cell "127.0.0.1" [ref=e308]
+      - row
+        - cell "2" [ref=e309]
+        - cell "2026-07-30T08:05:20.379984+00:00" [ref=e310]
+        - cell "admin" [ref=e311]
+        - cell "account.create" [ref=e312]
+        - cell "account:1" [ref=e313]
+        - cell "{\"exemplo\":true,\"indice\":0}" [ref=e314]
+        - cell "127.0.0.1" [ref=e315]
+      - row
+        - cell "1" [ref=e316]
+        - cell "2026-07-30T08:05:20.319622+00:00" [ref=e317]
+        - cell "sistema" [ref=e318]
+        - cell "bootstrap.initialized" [ref=e319]
+        - cell "user:1" [ref=e320]
+        - cell "{}" [ref=e321]
+        - cell "—" [ref=e322]
+    - navigation "Paginação da auditoria" [ref=e8]

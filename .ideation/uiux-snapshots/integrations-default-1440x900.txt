@@ -1,0 +1,103 @@
+- link "Ir para o conteúdo" [ref=e1]
+- banner
+  - link "Service Manager" [ref=e2]
+  - StaticText "admin · admin"
+  - group
+    - DisclosureTriangle "Administração" [expanded=false]
+  - link "Visão geral" [ref=e3]
+  - link "Minha conta" [ref=e4]
+  - form
+    - button "Sair" [ref=e5]
+- main
+  - generic
+    - paragraph
+      - StaticText "ADMINISTRAÇÃO"
+    - heading "Integrações de segurança" [level=1, ref=e6]
+    - paragraph
+      - StaticText "Envie eventos de segurança assinados a endpoints HTTPS externos. A URL completa fica criptografada e nunca é exibida."
+  - generic
+    - heading "Endpoints" [level=2, ref=e7]
+    - paragraph
+      - StaticText "1 de 20 configurados"
+    - table
+      - rowgroup
+        - row
+          - columnheader "HOST DE DESTINO" [ref=e24]
+          - columnheader "DESCRIÇÃO" [ref=e25]
+          - columnheader "ATIVO" [ref=e26]
+          - columnheader "ASSINATURAS" [ref=e27]
+          - columnheader "ENTREGAS RECENTES" [ref=e28]
+          - columnheader "AÇÕES" [ref=e29]
+      - row
+        - cell "hooks.exemplo.com.br" [ref=e19]
+          - strong
+            - StaticText "hooks.exemplo.com.br"
+        - cell "Alertas de seguranca para o canal do time" [ref=e20]
+        - cell "Sim" [ref=e21]
+        - cell "audit_chain_degraded login_failures reveal_rate_limit" [ref=e22]
+          - list
+            - listitem [level=1]
+              - StaticText "audit_chain_degraded"
+            - listitem [level=1]
+              - StaticText "login_failures"
+            - listitem [level=1]
+              - StaticText "reveal_rate_limit"
+        - cell "failed login_failures · connection retry login_failures · HTTP 502 · connection succeeded login_failures · HTTP 200" [ref=e23]
+          - list
+            - listitem [level=1]
+              - StaticText "failed"
+              - StaticText "login_failures · connection"
+            - listitem [level=1]
+              - StaticText "retry"
+              - StaticText "login_failures · HTTP 502 · connection"
+            - listitem [level=1]
+              - StaticText "succeeded"
+              - StaticText "login_failures · HTTP 200"
+        - cell
+          - form
+            - LabelText
+              - StaticText "URL nova (deixe em branco para manter)"
+              - textbox "URL nova (deixe em branco para manter)" [ref=e33]
+            - LabelText
+              - StaticText "Descrição"
+              - textbox "Descrição" [ref=e34]: Alertas de seguranca para o canal do time
+                - StaticText "Alertas de seguranca para o canal do time"
+            - LabelText
+              - checkbox "Ativo" [checked=true, ref=e35]
+              - StaticText "Ativo"
+            - group "EVENTOS"
+              - Legend
+                - StaticText "EVENTOS"
+              - checkbox "login_failures" [checked=true, ref=e36]
+              - checkbox "reveal_rate_limit" [checked=true, ref=e37]
+              - checkbox "authorization_failure" [checked=false, ref=e38]
+              - checkbox "audit_chain_degraded" [checked=true, ref=e39]
+              - checkbox "user_deactivated" [checked=false, ref=e40]
+              - checkbox "destructive_admin_action" [checked=false, ref=e41]
+            - button "Salvar" [ref=e30]
+          - form
+            - button "Testar" [ref=e31]
+          - form
+            - button "Excluir" [ref=e32]
+  - generic
+    - heading "Nova integração" [level=2, ref=e8]
+    - paragraph
+      - StaticText "O segredo de assinatura aparece uma única vez."
+    - form
+      - LabelText
+        - StaticText "URL do endpoint"
+        - textbox "URL do endpoint" [required, ref=e11]
+      - LabelText
+        - StaticText "Descrição"
+        - textbox "Descrição" [ref=e12]
+      - checkbox "Ativo" [checked=true, ref=e9]
+      - group "EVENTOS"
+        - Legend
+          - StaticText "EVENTOS"
+        - checkbox "login_failures" [checked=false, ref=e13]
+        - checkbox "reveal_rate_limit" [checked=false, ref=e14]
+        - checkbox "authorization_failure" [checked=false, ref=e15]
+        - checkbox "audit_chain_degraded" [checked=false, ref=e16]
+        - checkbox "user_deactivated" [checked=false, ref=e17]
+        - checkbox "destructive_admin_action" [checked=false, ref=e18]
+      - button "Criar" [ref=e10]

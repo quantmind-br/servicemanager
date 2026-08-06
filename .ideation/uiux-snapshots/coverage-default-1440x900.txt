@@ -1,0 +1,295 @@
+- link "Ir para o conteúdo" [ref=e1]
+- banner
+  - link "Service Manager" [ref=e2]
+  - StaticText "admin · admin"
+  - group
+    - DisclosureTriangle "Administração" [expanded=false]
+  - link "Visão geral" [ref=e3]
+  - link "Minha conta" [ref=e4]
+  - form
+    - button "Sair" [ref=e5]
+- main
+  - generic
+    - paragraph
+      - StaticText "COBERTURA"
+    - heading "Visão geral entre serviços" [level=1, ref=e6]
+    - paragraph
+      - StaticText "Compare status e cadastro de cada conta sem abrir serviço por serviço."
+  - form
+    - LabelText
+      - StaticText "Exibir"
+      - combobox "Exibir" [expanded=false, ref=e9]: Todas
+        - MenuListPopup
+          - option "Todas" [selected, ref=e121]
+          - option "Não cadastrada em nenhum serviço" [ref=e122]
+          - option "Ativa em mais de um serviço" [ref=e123]
+          - option "Falta cadastro em serviço selecionado" [ref=e124]
+    - group "Serviços selecionados"
+      - Legend
+        - StaticText "Serviços selecionados"
+      - checkbox "AWS Console" [checked=true, disabled, ref=e10]
+      - checkbox "Banco do Brasil - Portal Empresarial de Gestao de Contas" [checked=true, disabled, ref=e11]
+      - checkbox "GitHub Enterprise" [checked=true, disabled, ref=e12]
+      - checkbox "Google Workspace" [checked=true, disabled, ref=e13]
+      - checkbox "Sem contas ainda" [checked=true, disabled, ref=e14]
+      - checkbox "Slack" [checked=true, disabled, ref=e15]
+    - button "Aplicar" [ref=e7]
+    - StaticText "15 conta(s) no total · mostrando 15 nesta página"
+  - generic
+    - table
+      - rowgroup
+        - row
+          - columnheader "CONTA" [ref=e125]
+          - columnheader "AWS CONSOLE" [ref=e126]
+          - columnheader "BANCO DO BRASIL - PORTAL EMPRESARIAL DE GESTAO DE CONTAS" [ref=e127]
+          - columnheader "GITHUB ENTERPRISE" [ref=e128]
+          - columnheader "GOOGLE WORKSPACE" [ref=e129]
+          - columnheader "SEM CONTAS AINDA" [ref=e130]
+          - columnheader "SLACK" [ref=e131]
+      - row
+        - rowheader "auditoria@empresa-exemplo.com.br" [ref=e16]
+        - cell "A" [ref=e17]
+          - link "A" [ref=e132]
+            - StaticText "A"
+        - cell "A" [ref=e18]
+          - link "A" [ref=e133]
+        - cell "A" [ref=e19]
+          - link "A" [ref=e134]
+            - StaticText "A"
+        - cell "I" [ref=e20]
+          - link "I" [ref=e135]
+        - cell "·" [ref=e21]
+          - link "·" [ref=e136]
+        - cell "A" [ref=e22]
+          - link "A" [ref=e137]
+            - StaticText "A"
+      - row
+        - rowheader "compras@empresa-exemplo.com.br" [ref=e23]
+        - cell "I" [ref=e24]
+          - link "I" [ref=e138]
+            - StaticText "I"
+        - cell "I" [ref=e25]
+          - link "I" [ref=e139]
+        - cell "I" [ref=e26]
+          - link "I" [ref=e140]
+            - StaticText "I"
+        - cell "·" [ref=e27]
+          - link "·" [ref=e141]
+        - cell "·" [ref=e28]
+          - link "·" [ref=e142]
+        - cell "·" [ref=e29]
+          - link "·" [ref=e143]
+      - row
+        - rowheader "contabilidade.terceirizada.matriz@empresa-exemplo-com-nome-longo.com.br" [ref=e30]
+        - cell "A" [ref=e31]
+          - link "A" [ref=e144]
+            - StaticText "A"
+        - cell "A" [ref=e32]
+          - link "A" [ref=e145]
+        - cell "A" [ref=e33]
+          - link "A" [ref=e146]
+            - StaticText "A"
+        - cell "I" [ref=e34]
+          - link "I" [ref=e147]
+        - cell "·" [ref=e35]
+          - link "·" [ref=e148]
+        - cell "A" [ref=e36]
+          - link "A" [ref=e149]
+            - StaticText "A"
+      - row
+        - rowheader "dados@empresa-exemplo.com.br" [ref=e37]
+        - cell "·" [ref=e38]
+          - link "·" [ref=e150]
+            - StaticText "·"
+        - cell "·" [ref=e39]
+          - link "·" [ref=e151]
+        - cell "·" [ref=e40]
+          - link "·" [ref=e152]
+            - StaticText "·"
+        - cell "A" [ref=e41]
+          - link "A" [ref=e153]
+        - cell "·" [ref=e42]
+          - link "·" [ref=e154]
+        - cell "·" [ref=e43]
+          - link "·" [ref=e155]
+            - StaticText "·"
+      - row
+        - rowheader "diretoria.financeira@empresa-exemplo.com.br" [ref=e44]
+        - cell "I" [ref=e45]
+          - link "I" [ref=e156]
+        - cell "I" [ref=e46]
+          - link "I" [ref=e157]
+            - StaticText "I"
+        - cell "I" [ref=e47]
+          - link "I" [ref=e158]
+        - cell "·" [ref=e48]
+          - link "·" [ref=e159]
+            - StaticText "·"
+        - cell "·" [ref=e49]
+          - link "·" [ref=e160]
+        - cell "·" [ref=e50]
+          - link "·" [ref=e161]
+      - row
+        - rowheader "estagio@empresa-exemplo.com.br" [ref=e51]
+        - cell "·" [ref=e52]
+          - link "·" [ref=e162]
+        - cell "·" [ref=e53]
+          - link "·" [ref=e163]
+            - StaticText "·"
+        - cell "·" [ref=e54]
+          - link "·" [ref=e164]
+        - cell "A" [ref=e55]
+          - link "A" [ref=e165]
+            - StaticText "A"
+        - cell "·" [ref=e56]
+          - link "·" [ref=e166]
+        - cell "·" [ref=e57]
+          - link "·" [ref=e167]
+      - row
+        - rowheader "juridico@empresa-exemplo.com.br" [ref=e58]
+        - cell "A" [ref=e59]
+          - link "A" [ref=e168]
+        - cell "A" [ref=e60]
+          - link "A" [ref=e169]
+            - StaticText "A"
+        - cell "A" [ref=e61]
+          - link "A" [ref=e170]
+        - cell "I" [ref=e62]
+          - link "I" [ref=e171]
+            - StaticText "I"
+        - cell "·" [ref=e63]
+          - link "·" [ref=e172]
+        - cell "A" [ref=e64]
+          - link "A" [ref=e173]
+      - row
+        - rowheader "logistica@empresa-exemplo.com.br" [ref=e65]
+        - cell "·" [ref=e66]
+          - link "·" [ref=e174]
+        - cell "·" [ref=e67]
+          - link "·" [ref=e175]
+            - StaticText "·"
+        - cell "·" [ref=e68]
+          - link "·" [ref=e176]
+        - cell "A" [ref=e69]
+          - link "A" [ref=e177]
+            - StaticText "A"
+        - cell "·" [ref=e70]
+          - link "·" [ref=e178]
+        - cell "·" [ref=e71]
+          - link "·" [ref=e179]
+      - row
+        - rowheader "marketing@empresa-exemplo.com.br" [ref=e72]
+        - cell "·" [ref=e73]
+          - link "·" [ref=e180]
+            - StaticText "·"
+        - cell "·" [ref=e74]
+          - link "·" [ref=e181]
+        - cell "·" [ref=e75]
+          - link "·" [ref=e182]
+            - StaticText "·"
+        - cell "A" [ref=e76]
+          - link "A" [ref=e183]
+        - cell "·" [ref=e77]
+          - link "·" [ref=e184]
+        - cell "·" [ref=e78]
+          - link "·" [ref=e185]
+            - StaticText "·"
+      - row
+        - rowheader "operacoes@empresa-exemplo.com.br" [ref=e79]
+        - cell "A" [ref=e80]
+          - link "A" [ref=e186]
+        - cell "A" [ref=e81]
+          - link "A" [ref=e187]
+            - StaticText "A"
+        - cell "A" [ref=e82]
+          - link "A" [ref=e188]
+        - cell "I" [ref=e83]
+          - link "I" [ref=e189]
+            - StaticText "I"
+        - cell "·" [ref=e84]
+          - link "·" [ref=e190]
+        - cell "A" [ref=e85]
+          - link "A" [ref=e191]
+      - row
+        - rowheader "qualidade@empresa-exemplo.com.br" [ref=e86]
+        - cell "I" [ref=e87]
+          - link "I" [ref=e192]
+            - StaticText "I"
+        - cell "I" [ref=e88]
+          - link "I" [ref=e193]
+        - cell "I" [ref=e89]
+          - link "I" [ref=e194]
+            - StaticText "I"
+        - cell "·" [ref=e90]
+          - link "·" [ref=e195]
+        - cell "·" [ref=e91]
+          - link "·" [ref=e196]
+        - cell "·" [ref=e92]
+          - link "·" [ref=e197]
+      - row
+        - rowheader "rh@empresa-exemplo.com.br" [ref=e93]
+        - cell "·" [ref=e94]
+          - link "·" [ref=e198]
+        - cell "·" [ref=e95]
+          - link "·" [ref=e199]
+            - StaticText "·"
+        - cell "·" [ref=e96]
+          - link "·" [ref=e200]
+        - cell "A" [ref=e97]
+          - link "A" [ref=e201]
+            - StaticText "A"
+        - cell "·" [ref=e98]
+          - link "·" [ref=e202]
+        - cell "·" [ref=e99]
+          - link "·" [ref=e203]
+      - row
+        - rowheader "seguranca@empresa-exemplo.com.br" [ref=e100]
+        - cell "I" [ref=e101]
+          - link "I" [ref=e204]
+        - cell "I" [ref=e102]
+          - link "I" [ref=e205]
+            - StaticText "I"
+        - cell "I" [ref=e103]
+          - link "I" [ref=e206]
+        - cell "·" [ref=e104]
+          - link "·" [ref=e207]
+            - StaticText "·"
+        - cell "·" [ref=e105]
+          - link "·" [ref=e208]
+        - cell "·" [ref=e106]
+          - link "·" [ref=e209]
+      - row
+        - rowheader "suporte.nivel2@empresa-exemplo.com.br" [ref=e107]
+        - cell "I" [ref=e108]
+          - link "I" [ref=e210]
+        - cell "I" [ref=e109]
+          - link "I" [ref=e211]
+            - StaticText "I"
+        - cell "I" [ref=e110]
+          - link "I" [ref=e212]
+        - cell "·" [ref=e111]
+          - link "·" [ref=e213]
+            - StaticText "·"
+        - cell "·" [ref=e112]
+          - link "·" [ref=e214]
+        - cell "·" [ref=e113]
+          - link "·" [ref=e215]
+      - row
+        - rowheader "ti@empresa-exemplo.com.br" [ref=e114]
+        - cell "A" [ref=e115]
+          - link "A" [ref=e216]
+            - StaticText "A"
+        - cell "A" [ref=e116]
+          - link "A" [ref=e217]
+        - cell "A" [ref=e117]
+          - link "A" [ref=e218]
+            - StaticText "A"
+        - cell "I" [ref=e118]
+          - link "I" [ref=e219]
+        - cell "·" [ref=e119]
+          - link "·" [ref=e220]
+        - cell "A" [ref=e120]
+          - link "A" [ref=e221]
+            - StaticText "A"
+    - navigation "Paginação de contas" [ref=e8]
+      - StaticText "Mostrando 15 de 15 conta(s)"

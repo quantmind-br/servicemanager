@@ -1,9 +1,9 @@
 ---
 name: dokploy-management
 description: |
-  Manage a remote Dokploy PaaS instance via its REST API: projects, applications, compose services, databases, Docker containers, domains, deployments, logs, servers, settings, backups, notifications, certificates, registries, users, organizations, RBAC, git providers, SSH keys, schedules, patches, audit logs, white-labeling, enterprise licenses, SSO/OIDC, and forward auth.
+  Manage a remote Dokploy PaaS instance via its REST API: projects, applications, compose services, databases, Docker containers, domains, deployments, logs, servers, settings, backups, notifications, certificates, registries, users, organizations, RBAC, git providers, SSH keys, schedules, patches, audit logs, white-labeling, enterprise licenses, SSO/OIDC, SCIM provisioning, and forward auth.
   Use when the user wants to deploy or administer Dokploy resources, manage databases or containers, configure domains/servers/backups, inspect logs, or automate Dokploy API tasks.
-  Keywords: dokploy, paas, deploy, docker, traefik, application, compose, postgres, mysql, mariadb, mongo, redis, libsql, server, backup, domain, certificate, registry, notification, api, self-hosted, patch, license, sso, oidc, forward-auth, enterprise, rbac, logs.
+  Keywords: dokploy, paas, deploy, docker, traefik, application, compose, postgres, mysql, mariadb, mongo, redis, libsql, server, backup, domain, certificate, registry, notification, api, self-hosted, patch, license, sso, oidc, scim, forward-auth, enterprise, rbac, logs.
 compatibility: |
   Requires Python 3.10+ with httpx package installed.
   Setup: pip install httpx (in a virtual env recommended).
@@ -13,13 +13,14 @@ allowed-tools: Bash(python:*)
 
 # Dokploy Remote Management Skill
 
-Manage a remote Dokploy instance via its REST API (539 endpoints, 49 domains).
+Manage a remote Dokploy instance via its REST API (546 endpoints, 50 domains).
 
-The endpoint registry is generated from a live Dokploy server's OpenAPI document (API v0.29.x,
-fetched via `settings getOpenApiDocument`). Older self-hosted instances may not yet expose the newest
-endpoints; they return a `404 NOT_FOUND` envelope while the registered endpoint stays valid for newer
-servers. To regenerate the registry for a different server version, fetch that server's OpenAPI
-document and rebuild `ENDPOINTS` from it.
+The endpoint registry mirrors the Dokploy OpenAPI document for API v0.29.13, generated from the
+source tree (`pnpm --filter=dokploy generate:openapi`) and cross-checked against a live server via
+`settings getOpenApiDocument`. Older self-hosted instances may not yet expose the newest endpoints;
+they return a `404 NOT_FOUND` envelope while the registered endpoint stays valid for newer servers.
+To regenerate the registry for a different version, obtain that version's OpenAPI document (generate
+it from source or fetch it from a running server) and rebuild `ENDPOINTS` from it.
 
 ## Prerequisites
 
@@ -71,8 +72,8 @@ $PYTHON scripts/dokploy.py <domain> <action> [--param-name value ...]
 | `docker` | `getContainers`, `getConfig`, `restartContainer`, `startContainer`, `stopContainer`, `killContainer`, `removeContainer`, `uploadFileToContainer`, ... | Docker operations (12 actions, incl. file upload) |
 | `domain` | `create`, `update`, `delete`, `one`, `byApplicationId`, `validateDomain`, `generateDomain`, ... | Domain management (9 actions) |
 | `forward-auth` | `enable`, `disable`, `status`, `setAuthDomain`, `getAuthDomain`, `removeAuthDomain`, `deployOnServer`, `removeOnServer`, `listProviders`, `serverStatus` | Protect domains with SSO/OIDC via a Traefik forward-auth proxy — enterprise-gated (10 actions) |
-| `server` | `all`, `one`, `create`, `update`, `remove`, `setup`, ... | Server management (17 actions) |
-| `settings` | `getDokployVersion`, `getIp`, `health`, `cleanAll`, `getWebServerSettings`, `updateServerIp`, `getDockerDiskUsage`, ... | System settings (53 actions) |
+| `server` | `all`, `one`, `create`, `update`, `remove`, `setup`, `updateBuildsConcurrency`, ... | Server management (18 actions) |
+| `settings` | `getDokployVersion`, `getIp`, `health`, `cleanAll`, `getWebServerSettings`, `updateServerIp`, `getDockerDiskUsage`, `updateBuildsConcurrency`, ... | System settings (54 actions) |
 | `backup` | `create`, `update`, `remove`, `one`, `manualBackup*`, ... | Backup management (12 actions) |
 | `notification` | `all`, `create*`, `update*`, `test*`, `remove` (Slack, Telegram, Discord, Email, Resend, Gotify, Ntfy, Custom, Lark, Teams, Pushover, Mattermost) | Notifications — 12 providers (41 actions) |
 | `user` | `all`, `get`, `one`, `update`, `remove`, `createApiKey`, `assignPermissions`, `getPermissions`, `sendInvitation`, `haveRootAccess`, ... | User management (23 actions) |
@@ -96,12 +97,13 @@ $PYTHON scripts/dokploy.py <domain> <action> [--param-name value ...]
 | `rollback` | `delete`, `rollback` | Rollback management (2 actions) |
 | `cluster` | `addManager`, `addWorker`, `getNodes`, `removeWorker` | Swarm cluster (4 actions) |
 | `swarm` | `getNodeApps`, `getNodeInfo`, `getNodes`, `getContainerStats` | Swarm info (4 actions) |
-| `ai` | `create`, `delete`, `deploy`, `get`, `getAll`, `update`, `suggest`, `analyzeLogs`, `testConnection`, ... | AI features (12 actions) |
+| `ai` | `create`, `delete`, `deploy`, `get`, `getAll`, `update`, `suggest`, `analyzeLogs`, `testConnection`, `getCustomProviders`, `saveCustomProviders`, ... | AI features (14 actions) |
 | `tag` | `all`, `one`, `create`, `update`, `remove`, `assignToProject`, `removeFromProject`, `bulkAssign` | Project tags (8 actions) |
 | `custom-role` | `all`, `create`, `update`, `remove`, `getStatements`, `membersByRole` | Custom RBAC roles (6 actions) |
 | `stripe` | `canCreateMoreServers`, `createCheckoutSession`, `createCustomerPortalSession`, `getCurrentPlan`, `getInvoices`, `getProducts`, `upgradeSubscription`, `updateInvoiceNotifications` | Billing (8 actions) |
 | `license-key` | `validate`, `activate`, `deactivate`, `haveValidLicenseKey`, `getEnterpriseSettings`, `updateEnterpriseSettings` | Enterprise license keys (6 actions) |
 | `sso` | `register`, `update`, `one`, `listProviders`, `deleteProvider`, `enforceSSO`, `getTrustedOrigins`, `addTrustedOrigin`, `showSignInWithSSO`, ... | SSO/OIDC providers — enterprise-gated (11 actions) |
+| `scim` | `listProviders`, `generateToken`, `deleteProvider` | SCIM provisioning — enterprise-gated (3 actions) |
 | `whitelabeling` | `get`, `getPublic`, `update`, `reset` | White-label branding (4 actions) |
 | `audit-log` | `all` | Audit log — admin-gated (1 action) |
 | `admin` | `setupMonitoring` | Admin (1 action) |
@@ -407,7 +409,7 @@ $PYTHON scripts/dokploy.py settings cleanUnusedImages
 
 ## Technical Notes
 
-- All 539 Dokploy API endpoints are supported (49 domains), generated from a live server's OpenAPI document (API v0.29.x)
+- All 546 Dokploy API endpoints are supported (50 domains), matching the OpenAPI document for API v0.29.13
 - API uses tRPC-over-REST: `GET /api/<router>.<procedure>` for queries, `POST` for mutations
 - Two endpoints accept `multipart/form-data` file uploads: `application dropDeployment` (zip) and `docker uploadFileToContainer` (file)
 - Authentication via `x-api-key` header

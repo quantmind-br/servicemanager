@@ -1,0 +1,17 @@
+- link "Ir para o conteúdo" [ref=e1]
+- banner
+  - link "Service Manager" [ref=e2]
+- main
+  - generic
+    - paragraph
+      - StaticText "ACESSO PROTEGIDO"
+    - heading "Entrar no Service Manager" [level=1, ref=e3]
+    - form
+      - LabelText
+        - StaticText "Login"
+        - textbox "Login" [required, ref=e5]
+      - LabelText
+        - StaticText "Senha"
+        - textbox "Senha Mostrar senha" [required, ref=e6]
+        - button "Mostrar senha" [ref=e7]
+      - button "Entrar" [ref=e4]

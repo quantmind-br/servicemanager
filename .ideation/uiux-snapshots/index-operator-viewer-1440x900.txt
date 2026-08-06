@@ -1,0 +1,279 @@
+- link "Ir para o conteúdo" [ref=e1]
+- banner
+  - link "Service Manager" [ref=e2]
+  - StaticText "operador"
+  - link "Visão geral" [ref=e3]
+  - link "Minha conta" [ref=e4]
+  - form
+    - button "Sair" [ref=e10]
+- main
+  - generic
+    - paragraph
+      - StaticText "COFRE DE ACESSO"
+    - heading "Contas de serviço" [level=1, ref=e11]
+    - paragraph
+      - StaticText "Serviço selecionado: "
+      - strong
+        - StaticText "Google Workspace"
+  - region "Serviços" [ref=e5]
+    - navigation "Selecionar serviço" [ref=e12]
+      - link "AWS Console" [ref=e18]
+      - link "Google Workspace" [ref=e19]
+      - link "Slack" [ref=e20]
+    - button "Organizar serviços" [ref=e13]
+  - region "Resumo das contas" [ref=e6]
+    - strong
+      - StaticText "15"
+    - StaticText " contas"
+    - StaticText "5"
+    - StaticText "ativas"
+    - StaticText "5"
+    - StaticText "sem uso"
+    - StaticText "5"
+    - StaticText "inativas"
+  - button "Copiar link da visão" [ref=e7]
+  - paragraph
+    - link "Modelo CSV" [ref=e14]
+    - StaticText " · "
+    - link "Modelo XLSX" [ref=e15]
+  - StaticText "Vencida: 2"
+  - StaticText "Vence em breve: 1"
+  - link "Ver rotação" [ref=e8]
+  - region "Contas" [ref=e9]
+    - heading "Contas" [level=2, ref=e16]
+    - paragraph
+      - StaticText "A senha principal permanece oculta até “Exibir”. Campos adicionais ficam visíveis e cifrados em repouso."
+    - table "Contas do serviço Google Workspace"
+      - caption
+        - StaticText "Contas do serviço Google Workspace"
+      - rowgroup
+        - row
+          - columnheader "EMAIL Filtrar por email" [ref=e96]
+            - button "EMAIL" [ref=e132]
+            - searchbox "Filtrar por email" [ref=e133]
+          - columnheader "SENHA" [ref=e97]
+          - columnheader "STATUS ↑ Todos" [ref=e98]
+            - button "STATUS ↑" [ref=e134]
+              - StaticText "STATUS"
+              - StaticText " ↑"
+            - combobox "Filtrar por status" [expanded=false, ref=e135]: Todos
+              - MenuListPopup
+                - option "Todos" [selected, ref=e138]
+                - option "Ativo" [ref=e139]
+                - option "Nunca teve" [ref=e140]
+                - option "Teve, mas inativo" [ref=e141]
+          - columnheader "CADASTRO Todos" [ref=e99]
+            - StaticText "CADASTRO"
+            - combobox "Filtrar por cadastro" [expanded=false, ref=e136]: Todos
+              - MenuListPopup
+                - option "Todos" [selected, ref=e142]
+                - option "Cadastrada" [ref=e143]
+                - option "Não cadastrada" [ref=e144]
+          - columnheader "ROTAÇÃO Todas" [ref=e100]
+            - StaticText "ROTAÇÃO"
+            - combobox "Filtrar por rotação" [expanded=false, ref=e137]: Todas
+              - MenuListPopup
+                - option "Todas" [selected, ref=e145]
+                - option "Vencida" [ref=e146]
+                - option "Vence em breve" [ref=e147]
+                - option "Em dia" [ref=e148]
+                - option "Sem política" [ref=e149]
+                - option "Desconhecido" [ref=e150]
+          - columnheader "AÇÕES" [ref=e101]
+      - row
+        - cell "Detalhes da conta dados@empresa-exemplo.com.br Copiar e-mail" [ref=e21]
+          - button "Detalhes da conta" [expanded=false, ref=e102]
+          - StaticText "dados@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e103]
+        - cell "••••••••" [ref=e22]
+          - StaticText "••••••••"
+        - cell "Ativo" [ref=e23]
+          - StaticText "Ativo"
+        - cell "Não cadastrada" [ref=e24]
+        - cell "Vencida" [ref=e25]
+          - StaticText "Vencida"
+        - cell
+      - row
+        - cell "Detalhes da conta estagio@empresa-exemplo.com.br Copiar e-mail" [ref=e26]
+          - button "Detalhes da conta" [expanded=false, ref=e104]
+          - StaticText "estagio@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e105]
+        - cell "••••••••" [ref=e27]
+          - StaticText "••••••••"
+        - cell "Ativo" [ref=e28]
+          - StaticText "Ativo"
+        - cell "Cadastrada" [ref=e29]
+        - cell "Em dia" [ref=e30]
+          - StaticText "Em dia"
+        - cell
+      - row
+        - cell "Detalhes da conta logistica@empresa-exemplo.com.br Copiar e-mail" [ref=e31]
+          - button "Detalhes da conta" [expanded=false, ref=e106]
+          - StaticText "logistica@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e107]
+        - cell "••••••••" [ref=e32]
+          - StaticText "••••••••"
+        - cell "Ativo" [ref=e33]
+          - StaticText "Ativo"
+        - cell "Cadastrada" [ref=e34]
+        - cell "Em dia" [ref=e35]
+          - StaticText "Em dia"
+        - cell
+      - row
+        - cell "Detalhes da conta marketing@empresa-exemplo.com.br Copiar e-mail" [ref=e36]
+          - button "Detalhes da conta" [expanded=false, ref=e108]
+          - StaticText "marketing@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e109]
+        - cell "••••••••" [ref=e37]
+          - StaticText "••••••••"
+        - cell "Ativo" [ref=e38]
+          - StaticText "Ativo"
+        - cell "Não cadastrada" [ref=e39]
+        - cell "Vencida" [ref=e40]
+          - StaticText "Vencida"
+        - cell
+      - row
+        - cell "Detalhes da conta rh@empresa-exemplo.com.br Copiar e-mail" [ref=e41]
+          - button "Detalhes da conta" [expanded=false, ref=e110]
+          - StaticText "rh@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e111]
+        - cell "••••••••" [ref=e42]
+          - StaticText "••••••••"
+        - cell "Ativo" [ref=e43]
+          - StaticText "Ativo"
+        - cell "Cadastrada" [ref=e44]
+        - cell "Vence em breve" [ref=e45]
+          - StaticText "Vence em breve"
+        - cell
+      - row
+        - cell "Detalhes da conta compras@empresa-exemplo.com.br Copiar e-mail" [ref=e46]
+          - button "Detalhes da conta" [expanded=false, ref=e112]
+          - StaticText "compras@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e113]
+        - cell "••••••••" [ref=e47]
+          - StaticText "••••••••"
+        - cell "Nunca teve" [ref=e48]
+          - StaticText "Nunca teve"
+        - cell "Não cadastrada" [ref=e49]
+        - cell "Em dia" [ref=e50]
+          - StaticText "Em dia"
+        - cell
+      - row
+        - cell "Detalhes da conta diretoria.financeira@empresa-exemplo.com.br Copiar e-mail" [ref=e51]
+          - button "Detalhes da conta" [expanded=false, ref=e114]
+          - StaticText "diretoria.financeira@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e115]
+        - cell "••••••••" [ref=e52]
+          - StaticText "••••••••"
+        - cell "Nunca teve" [ref=e53]
+          - StaticText "Nunca teve"
+        - cell "Cadastrada" [ref=e54]
+        - cell "Em dia" [ref=e55]
+          - StaticText "Em dia"
+        - cell
+      - row
+        - cell "Detalhes da conta qualidade@empresa-exemplo.com.br Copiar e-mail" [ref=e56]
+          - button "Detalhes da conta" [expanded=false, ref=e116]
+          - StaticText "qualidade@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e117]
+        - cell "••••••••" [ref=e57]
+          - StaticText "••••••••"
+        - cell "Nunca teve" [ref=e58]
+          - StaticText "Nunca teve"
+        - cell "Não cadastrada" [ref=e59]
+        - cell "Em dia" [ref=e60]
+          - StaticText "Em dia"
+        - cell
+      - row
+        - cell "Detalhes da conta seguranca@empresa-exemplo.com.br Copiar e-mail" [ref=e61]
+          - button "Detalhes da conta" [expanded=false, ref=e118]
+          - StaticText "seguranca@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e119]
+        - cell "••••••••" [ref=e62]
+          - StaticText "••••••••"
+        - cell "Nunca teve" [ref=e63]
+          - StaticText "Nunca teve"
+        - cell "Cadastrada" [ref=e64]
+        - cell "Em dia" [ref=e65]
+          - StaticText "Em dia"
+        - cell
+      - row
+        - cell "Detalhes da conta suporte.nivel2@empresa-exemplo.com.br Copiar e-mail" [ref=e66]
+          - button "Detalhes da conta" [expanded=false, ref=e120]
+          - StaticText "suporte.nivel2@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e121]
+        - cell "••••••••" [ref=e67]
+          - StaticText "••••••••"
+        - cell "Nunca teve" [ref=e68]
+          - StaticText "Nunca teve"
+        - cell "Cadastrada" [ref=e69]
+        - cell "Em dia" [ref=e70]
+          - StaticText "Em dia"
+        - cell
+      - row
+        - cell "Detalhes da conta auditoria@empresa-exemplo.com.br Copiar e-mail" [ref=e71]
+          - button "Detalhes da conta" [expanded=false, ref=e122]
+          - StaticText "auditoria@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e123]
+        - cell "••••••••" [ref=e72]
+          - StaticText "••••••••"
+        - cell "Teve, mas inativo" [ref=e73]
+          - StaticText "Teve, mas inativo"
+        - cell "Não cadastrada" [ref=e74]
+        - cell "Em dia" [ref=e75]
+          - StaticText "Em dia"
+        - cell
+      - row
+        - cell "Detalhes da conta contabilidade.terceirizada.matriz@empresa-exemplo-com-nome-longo.com.br Copiar e-mail" [ref=e76]
+          - button "Detalhes da conta" [expanded=false, ref=e124]
+          - StaticText "contabilidade.terceirizada.matriz@empresa-exemplo-com-nome-longo.com.br"
+          - button "Copiar e-mail" [ref=e125]
+        - cell "••••••••" [ref=e77]
+          - StaticText "••••••••"
+        - cell "Teve, mas inativo" [ref=e78]
+          - StaticText "Teve, mas inativo"
+        - cell "Não cadastrada" [ref=e79]
+        - cell "Em dia" [ref=e80]
+          - StaticText "Em dia"
+        - cell
+      - row
+        - cell "Detalhes da conta juridico@empresa-exemplo.com.br Copiar e-mail" [ref=e81]
+          - button "Detalhes da conta" [expanded=false, ref=e126]
+          - StaticText "juridico@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e127]
+        - cell "••••••••" [ref=e82]
+          - StaticText "••••••••"
+        - cell "Teve, mas inativo" [ref=e83]
+          - StaticText "Teve, mas inativo"
+        - cell "Cadastrada" [ref=e84]
+        - cell "Em dia" [ref=e85]
+          - StaticText "Em dia"
+        - cell
+      - row
+        - cell "Detalhes da conta operacoes@empresa-exemplo.com.br Copiar e-mail" [ref=e86]
+          - button "Detalhes da conta" [expanded=false, ref=e128]
+          - StaticText "operacoes@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e129]
+        - cell "••••••••" [ref=e87]
+          - StaticText "••••••••"
+        - cell "Teve, mas inativo" [ref=e88]
+          - StaticText "Teve, mas inativo"
+        - cell "Cadastrada" [ref=e89]
+        - cell "Em dia" [ref=e90]
+          - StaticText "Em dia"
+        - cell
+      - row
+        - cell "Detalhes da conta ti@empresa-exemplo.com.br Copiar e-mail" [ref=e91]
+          - button "Detalhes da conta" [expanded=false, ref=e130]
+          - StaticText "ti@empresa-exemplo.com.br"
+          - button "Copiar e-mail" [ref=e131]
+        - cell "••••••••" [ref=e92]
+          - StaticText "••••••••"
+        - cell "Teve, mas inativo" [ref=e93]
+          - StaticText "Teve, mas inativo"
+        - cell "Não cadastrada" [ref=e94]
+        - cell "Em dia" [ref=e95]
+          - StaticText "Em dia"
+        - cell
+    - navigation "Paginação de contas" [ref=e17]
+      - StaticText "Mostrando 15 conta(s) nesta página"

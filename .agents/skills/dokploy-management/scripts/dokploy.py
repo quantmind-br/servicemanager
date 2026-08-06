@@ -83,6 +83,12 @@ ENDPOINTS = [
     {
         "tag": "ai",
         "m": "GET",
+        "p": "/ai.getCustomProviders",
+        "params": [],
+    },
+    {
+        "tag": "ai",
+        "m": "GET",
         "p": "/ai.getEnabledProviders",
         "params": [],
     },
@@ -101,6 +107,14 @@ ENDPOINTS = [
         "p": "/ai.one",
         "params": [
             {"n": "aiId", "t": "string", "in": "query", "r": True},
+        ],
+    },
+    {
+        "tag": "ai",
+        "m": "POST",
+        "p": "/ai.saveCustomProviders",
+        "params": [
+            {"n": "providers", "t": "array", "in": "body", "r": True},
         ],
     },
     {
@@ -600,6 +614,7 @@ ENDPOINTS = [
             {"n": "composeId", "t": "string", "in": "body"},
             {"n": "serviceName", "t": "string", "in": "body"},
             {"n": "metadata", "t": "string", "in": "body"},
+            {"n": "includeEncryptionKey", "t": "boolean", "in": "body"},
         ],
     },
     {
@@ -699,6 +714,7 @@ ENDPOINTS = [
             {"n": "serviceName", "t": "string", "in": "body", "r": True},
             {"n": "metadata", "t": "string", "in": "body", "r": True},
             {"n": "databaseType", "t": "string", "in": "body", "r": True, "e": ["postgres", "mariadb", "mysql", "mongo", "web-server", "libsql"]},
+            {"n": "includeEncryptionKey", "t": "boolean", "in": "body"},
         ],
     },
     {
@@ -4395,6 +4411,28 @@ ENDPOINTS = [
         ],
     },
     {
+        "tag": "scim",
+        "m": "POST",
+        "p": "/scim.deleteProvider",
+        "params": [
+            {"n": "providerId", "t": "string", "in": "body", "r": True},
+        ],
+    },
+    {
+        "tag": "scim",
+        "m": "POST",
+        "p": "/scim.generateToken",
+        "params": [
+            {"n": "providerId", "t": "string", "in": "body", "r": True},
+        ],
+    },
+    {
+        "tag": "scim",
+        "m": "GET",
+        "p": "/scim.listProviders",
+        "params": [],
+    },
+    {
         "tag": "security",
         "m": "POST",
         "p": "/security.create",
@@ -4555,6 +4593,15 @@ ENDPOINTS = [
             {"n": "serverType", "t": "string", "in": "body", "r": True, "e": ["deploy", "build"]},
             {"n": "enableDockerCleanup", "t": "boolean", "in": "body"},
             {"n": "command", "t": "string", "in": "body"},
+        ],
+    },
+    {
+        "tag": "server",
+        "m": "POST",
+        "p": "/server.updateBuildsConcurrency",
+        "params": [
+            {"n": "serverId", "t": "string", "in": "body", "r": True},
+            {"n": "buildsConcurrency", "t": "integer", "in": "body", "r": True},
         ],
     },
     {
@@ -4856,6 +4903,14 @@ ENDPOINTS = [
         "p": "/settings.toggleRequests",
         "params": [
             {"n": "enable", "t": "boolean", "in": "body", "r": True},
+        ],
+    },
+    {
+        "tag": "settings",
+        "m": "POST",
+        "p": "/settings.updateBuildsConcurrency",
+        "params": [
+            {"n": "buildsConcurrency", "t": "integer", "in": "body", "r": True},
         ],
     },
     {

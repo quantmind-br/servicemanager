@@ -1,0 +1,14 @@
+- dialog "Editar conta"
+  - form
+    - heading "Editar conta" [level=3, ref=e1]
+    - LabelText
+      - StaticText "Email"
+      - textbox "Email" [required, ref=e4]: auditoria@empresa-exemplo.com.br
+        - StaticText "auditoria@empresa-exemplo.com.br"
+    - LabelText
+      - StaticText "Nova senha"
+      - StaticText "(vazio preserva)"
+      - textbox "Nova senha (vazio preserva) Mostrar senha" [ref=e5]
+      - button "Mostrar senha" [ref=e6]
+    - button "Cancelar" [ref=e2]
+    - button "Salvar" [ref=e3]
